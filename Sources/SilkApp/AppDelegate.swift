@@ -92,8 +92,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// `--config-path <file>` (as in AeroSpace) overrides config discovery.
+    private var configPathArgument: URL? {
+        let arguments = CommandLine.arguments
+        guard let index = arguments.firstIndex(of: "--config-path"), arguments.indices.contains(index + 1) else { return nil }
+        return URL(filePath: (arguments[index + 1] as NSString).expandingTildeInPath)
+    }
+
     private func launchEngine() {
-        let load = ConfigLoader.load()
+        let load = configPathArgument.map { ConfigLoader.load(contentsOf: $0) } ?? ConfigLoader.load()
         let engine = Engine(configLoad: load.isFatal ? ConfigLoadResult(config: ConfigLoader.defaultConfig, url: load.url, diagnostics: load.diagnostics, isFatal: true) : load)
         self.engine = engine
         engine.start()

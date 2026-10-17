@@ -25,7 +25,8 @@ final class StateStore {
 
     private let directory: URL
     private let queue = DispatchQueue(label: "dev.jensderond.silk.state", qos: .utility)
-    private var lastWrittenLedger: [UInt32: HiddenWindow] = [:]
+    /// Nil until the first write, so the first call always replaces what a previous run left.
+    private var lastWrittenLedger: [UInt32: HiddenWindow]?
 
     init(directory: URL = StateStore.defaultDirectory) {
         self.directory = directory

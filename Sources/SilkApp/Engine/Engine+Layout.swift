@@ -166,10 +166,15 @@ extension Engine {
     func restoreFramesForHiddenWindows() -> [UInt32: StateStore.HiddenWindow] {
         let hidden = windows.filter { $0.value.isHidden }
         guard !hidden.isEmpty else { return [:] }
-        let fallback = hidden.contains { $0.value.lastVisibleFrame == nil } ? manager.terminationFrames() : [:]
+        let screens = platform.monitors.map(\.visibleFrame)
+        // A frame from a display that has since been disconnected would put the window off screen
+        func onScreen(_ frame: CGRect?) -> CGRect? {
+            frame.flatMap { frame in screens.contains { $0.intersects(frame) } ? frame : nil }
+        }
+        let fallback = hidden.contains { onScreen($0.value.lastVisibleFrame) == nil } ? manager.terminationFrames() : [:]
         var ledger: [UInt32: StateStore.HiddenWindow] = [:]
         for (id, window) in hidden {
-            guard let restore = window.lastVisibleFrame ?? fallback[id] else { continue }
+            guard let restore = onScreen(window.lastVisibleFrame) ?? fallback[id] else { continue }
             ledger[id] = StateStore.HiddenWindow(windowID: id, pid: window.pid, bundleID: nil, restoreFrame: restore)
         }
         return ledger

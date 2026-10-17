@@ -112,7 +112,6 @@ extension Engine: StatusBarActions {
         state.workspaces = workspaces
         state.configHasProblems = hasConfigProblems
         state.secureInputActive = platform.isSecureInputEnabled
-        state.launchAtLogin = LoginItem.isEnabled
         statusBar.update(state)
     }
 
@@ -147,13 +146,6 @@ extension Engine: StatusBarActions {
 
     func statusBarRequestAccessibility() {
         _ = AccessibilityPermission.prompt()
-    }
-
-    func statusBarToggleLaunchAtLogin() {
-        if let error = LoginItem.set(enabled: !LoginItem.isEnabled) {
-            showMessage(title: "Launch at Login", heading: error, body: "")
-        }
-        updateStatusBar()
     }
 
     func statusBarQuit() {

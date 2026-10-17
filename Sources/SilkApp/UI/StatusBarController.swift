@@ -27,7 +27,6 @@ struct MenuBarState: Equatable {
     var workspaces: [Workspace] = []
     var configHasProblems = false
     var secureInputActive = false
-    var launchAtLogin = false
 }
 
 /// Actions the menu can trigger. Implemented by the engine.
@@ -39,7 +38,6 @@ protocol StatusBarActions: AnyObject {
     func statusBarOpenConfig()
     func statusBarShowConfigProblems()
     func statusBarRequestAccessibility()
-    func statusBarToggleLaunchAtLogin()
     func statusBarQuit()
 }
 
@@ -145,9 +143,6 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                 menu.addItem(actionItem(state.status == .running ? "Disable" : "Enable", #selector(toggleEnabled), key: "e"))
                 menu.addItem(actionItem("Open Config", #selector(openConfig), key: ","))
                 menu.addItem(actionItem("Reload Config", #selector(reloadConfig), key: "r"))
-                let login = actionItem("Launch at Login", #selector(toggleLaunchAtLogin))
-                login.state = state.launchAtLogin ? .on : .off
-                menu.addItem(login)
                 let styles = NSMenu()
                 for option in Style.allCases {
                     let entry = actionItem(option.title, #selector(selectStyle(_:)))
@@ -184,7 +179,6 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     @objc private func reloadConfig() { actions?.statusBarReloadConfig() }
     @objc private func showConfigProblems() { actions?.statusBarShowConfigProblems() }
     @objc private func requestAccessibility() { actions?.statusBarRequestAccessibility() }
-    @objc private func toggleLaunchAtLogin() { actions?.statusBarToggleLaunchAtLogin() }
     @objc private func quit() { actions?.statusBarQuit() }
     @objc private func selectStyle(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let selected = Style(rawValue: raw) else { return }

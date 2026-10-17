@@ -23,6 +23,7 @@ extension Engine {
                     manager.windowReclassified(snapshot.id, kind: SilkCore.WindowKind(snapshot.kind))
                 }
             case .windowDestroyed(let id):
+                if pendingFocus?.window == id { replayDeferredFocus() }
                 detectionsDeferredUntilMouseUp[id] = nil
                 windows[id] = nil
                 animator.cancel(window: id)
@@ -59,7 +60,7 @@ extension Engine {
                 manager.applied(window: id, presentedFrame: frame)
                 return
             case .focusedWindowChanged(let pid, let window):
-                guard acceptNativeFocus(window) else { return }
+                guard acceptNativeFocus(window, pid: pid) else { return }
                 manager.nativeFocusChanged(window: window, pid: pid)
                 reorderBorder()
                 updateStatusBar()
@@ -72,6 +73,7 @@ extension Engine {
                 return
             case .appTerminated(let pid):
                 launchTimes[pid] = nil
+                if let pending = pendingFocus, windows[pending.window]?.pid == pid { replayDeferredFocus() }
                 for (id, window) in windows where window.pid == pid {
                     windows[id] = nil
                     animator.cancel(window: id)
@@ -93,6 +95,7 @@ extension Engine {
             case .didWake:
                 return
             case .screenLocked:
+                replayDeferredFocus()
                 isScreenLocked = true
                 saveWorldIfChanged()
                 return
@@ -113,14 +116,31 @@ extension Engine {
     /// come from earlier activations that slow apps deliver late. Following them would yank focus
     /// (and the visible workspace) away from what the user just chose. They are ignored until macOS
     /// confirms the requested window, or briefly if it never does.
-    private func acceptNativeFocus(_ window: UInt32?) -> Bool {
-        guard let pending = pendingFocus else { return true }
+    /// The last ignored report is replayed when the wait ends without confirmation (the window was
+    /// already focused, focusing failed, or the user really did click elsewhere), so the core never
+    /// stays out of sync with macOS.
+    private func acceptNativeFocus(_ window: UInt32?, pid: pid_t) -> Bool {
+        guard var pending = pendingFocus else { return true }
         if window == pending.window || Date() > pending.deadline {
             pendingFocus = nil
             return true
         }
-        Trace.log("ignoring stale native focus \(window.map(String.init) ?? "nil"), waiting for \(pending.window)")
+        Trace.log("deferring native focus \(window.map(String.init) ?? "nil"), waiting for \(pending.window)")
+        pending.deferred = (window, pid)
+        pendingFocus = pending
+        DispatchQueue.main.asyncAfter(deadline: .now() + pending.deadline.timeIntervalSinceNow) { [weak self] in
+            self?.replayDeferredFocus(pending.id)
+        }
         return false
+    }
+
+    /// Ends the wait for `id` (if still current) and applies the last report it held back.
+    func replayDeferredFocus(_ id: UUID? = nil) {
+        guard let pending = pendingFocus, id == nil || pending.id == id else { return }
+        pendingFocus = nil
+        guard let (window, pid) = pending.deferred else { return }
+        manager.nativeFocusChanged(window: window, pid: pid)
+        scheduleFlush()
     }
 
     /// Registers a discovered window with the engine and the core.

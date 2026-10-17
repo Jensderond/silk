@@ -35,6 +35,7 @@ final class Engine {
     var hotkeyDescriptors: [UInt32: String] = [:]
     var isScreenLocked = false
     var isStarted = false
+    private var isShutDown = false
     private var flushScheduled = false
     /// One frame: incoming windows get drawn before outgoing ones are hidden.
     static let parkDelay: TimeInterval = 0.016
@@ -45,8 +46,11 @@ final class Engine {
     var hasConfigProblems = false
     var statusBarUpdateScheduled = false
     struct PendingFocus {
+        let id = UUID()
         var window: UInt32
         var deadline: Date
+        /// The most recent focus report held back while waiting.
+        var deferred: (window: UInt32?, pid: pid_t)?
     }
     /// The window Silk last asked macOS to focus, until macOS confirms it.
     var pendingFocus: PendingFocus?
@@ -83,13 +87,19 @@ final class Engine {
         animator.onComplete = { [weak self] window, epoch in self?.animationCompleted(window: window, epoch: epoch) }
         applyAppearanceSettings(config)
 
-        restoreStrandedWindows()
         if let frozen = loadFrozenWorld() { manager.restore(frozen) }
+        isScreenLocked = Self.isSessionLocked
 
         startIPC()
         platform.enumerateAll { [weak self] snapshots in
             guard let self else { return }
-            for snapshot in snapshots { self.detect(snapshot, isStartup: true) }
+            // Workers exist only now, so stranded windows can be written; detection then sees
+            // them where they belong instead of in the corner.
+            let restored = self.restoreStrandedWindows()
+            for var snapshot in snapshots {
+                if let frame = restored[snapshot.id] { snapshot.frame = frame }
+                self.detect(snapshot, isStartup: true)
+            }
             self.manager.finishStartup()
             self.isStarted = true
             self.flush()
@@ -177,14 +187,20 @@ final class Engine {
         stateStore.saveWorld(data)
     }
 
-    /// Windows a crashed or killed previous run left parked in a corner go back on screen first,
-    /// so startup detection sees them where the user expects them.
-    private func restoreStrandedWindows() {
+    /// Puts windows a crashed or killed previous run left parked in a corner back on screen.
+    /// Returns the frames of the windows it moved.
+    private func restoreStrandedWindows() -> [UInt32: CGRect] {
         let stranded = stateStore.loadStrandedWindows()
-        guard !stranded.isEmpty else { return }
-        let frames = stranded.map { ($0.windowID, $0.restoreFrame) }
-        _ = platform.writeSynchronously(frames, deadline: .now() + 1)
         stateStore.recordHidden([:])
+        guard !stranded.isEmpty else { return [:] }
+        let frames = stranded.map { ($0.windowID, $0.restoreFrame) }
+        let written = platform.writeSynchronously(frames, deadline: .now() + 1)
+        Trace.log("restored \(written.count) of \(frames.count) stranded windows")
+        return Dictionary(frames.filter { written.contains($0.0) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    private static var isSessionLocked: Bool {
+        (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool ?? false
     }
 
     // MARK: - Termination
@@ -207,6 +223,8 @@ final class Engine {
     }
 
     func shutdown() {
+        guard !isShutDown else { return }
+        isShutDown = true
         restoreHiddenWindowsSynchronously()
         hotkeys.unregisterAll()
         ipcServer?.stop()
