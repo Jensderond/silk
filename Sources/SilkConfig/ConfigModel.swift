@@ -183,7 +183,9 @@ public struct AnimationConfig: Equatable, Sendable {
     public var enabled = true
     /// Milliseconds for window move/resize animations.
     public var duration = 180
-    public var curve: AnimationCurve = .hyprland
+    /// No overshoot by default: tiles sit a gap away from the screen edges, and macOS clamps windows that
+    /// overshoot into the menu bar, which shows as a bounce.
+    public var curve: AnimationCurve = .easeOut
     public var windowOpen: WindowOpenAnimation = .move
     public var workspaceSwitch: WorkspaceSwitchAnimation = .slide
     /// Milliseconds for workspace switch animations.

@@ -41,6 +41,9 @@ final class Engine {
     var lastFocusedWindow: UInt32?
     var focusFollowsMouseMonitor: Any?
     var hasConfigProblems = false
+    var statusBarUpdateScheduled = false
+    /// When each app was launched (only apps launched while Silk runs).
+    var launchTimes: [pid_t: Date] = [:]
 
     init(configLoad: ConfigLoadResult) {
         self.configLoad = configLoad
@@ -109,8 +112,10 @@ final class Engine {
     /// Computes the core's plan and hands every change to the animator.
     func flush() {
         guard isStarted, !isScreenLocked, manager.needsLayout else { return }
+        Trace.log("flush begins")
         let plan = manager.computeLayout()
         let request = makeAnimationRequest(for: plan)
+        Trace.log("flush epoch \(plan.epoch): \(request.moves.map { "\($0.window) \($0.kind) \($0.from) → \($0.to)" }) snaps \(request.snaps.map(\.window))")
         if !request.moves.isEmpty || !request.snaps.isEmpty {
             animator.apply(request)
         }

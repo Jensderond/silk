@@ -23,6 +23,7 @@ struct TrackedWindow {
 extension Engine {
     static let reassertLimit = 3
     static let reassertWindow: TimeInterval = 2
+    static let launchSettleTime: TimeInterval = 1.5
 
     /// Translates a complete plan into the moves and snaps that actually change something.
     func makeAnimationRequest(for plan: LayoutPlan) -> AnimationRequest {
@@ -53,7 +54,9 @@ extension Engine {
             if plan.userDriven.contains(id) || reassert {
                 request.snaps.append(.init(window: id, frame: target))
             } else if let initial = plan.newlyPlaced[id] {
-                switch config.animations.windowOpen {
+                // A launching app can't keep up with per-frame writes; one jump lands sooner and cleaner
+                let openStyle = isLaunching(window.pid) ? .none : config.animations.windowOpen
+                switch openStyle {
                     case .none: request.snaps.append(.init(window: id, frame: target))
                     case .move: request.moves.append(.init(window: id, pid: window.pid, from: initial, to: target, kind: .open(.move), displayID: displayID))
                     case .popin: request.moves.append(.init(window: id, pid: window.pid, from: initial, to: target, kind: .open(.popIn), displayID: displayID))
@@ -87,6 +90,11 @@ extension Engine {
             }
         }
         return request
+    }
+
+    /// Apps launched in the last 1.5 s are still busy and apply AX frame writes slowly.
+    private func isLaunching(_ pid: pid_t) -> Bool {
+        launchTimes[pid].map { Date().timeIntervalSince($0) < Self.launchSettleTime } ?? false
     }
 
     private func allowReassert(_ window: inout TrackedWindow) -> Bool {

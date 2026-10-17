@@ -86,7 +86,19 @@ extension Engine {
 // MARK: - Menu bar
 
 extension Engine: StatusBarActions {
+    /// Refreshes the menu bar at the end of the current main-queue turn (many events per turn
+    /// cause one refresh).
     func updateStatusBar() {
+        guard !statusBarUpdateScheduled else { return }
+        statusBarUpdateScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.statusBarUpdateScheduled = false
+            self.refreshStatusBar()
+        }
+    }
+
+    private func refreshStatusBar() {
         guard let manager else { return }
         let model = manager.menuBarModel()
         let workspaces = model.workspaces.map {

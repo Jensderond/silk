@@ -167,33 +167,38 @@ final class AppWorker: FrameWriteTarget {
 
     // MARK: - Registration
 
+    /// Subscribes to the app-level notifications. Like AeroSpace, the app counts as registered as
+    /// soon as one required notification is accepted: launching apps accept them one by one, and
+    /// waiting for all of them would delay the first window. Missing ones are retried until added.
     func attemptRegistration() {
-        guard !isRegistered, let observer else { return }
+        guard let observer else { return }
         cancel(&registrationRetryTimer)
-        var added: [String] = []
-        var failure: AXError?
-        for name in Self.requiredAppNotifications + Self.optionalAppNotifications {
+        var lastError = AXError.success
+        for name in Self.requiredAppNotifications + Self.optionalAppNotifications where !registeredAppNotifications.contains(name) {
             let error = AXObserverAddNotification(observer, appElement, name as CFString, nil)
             if error == .success || error == .notificationAlreadyRegistered {
-                added.append(name)
+                registeredAppNotifications.append(name)
             } else if Self.requiredAppNotifications.contains(name) {
-                failure = error
-                break
+                lastError = error
             }
         }
-        if let failure {
-            for name in added { AXObserverRemoveNotification(observer, appElement, name as CFString) }
-            finishInitialEnumeration([])
+        let missingRequired = Self.requiredAppNotifications.contains { !registeredAppNotifications.contains($0) }
+        if missingRequired {
             if let delay = backoff.nextDelay() {
                 registrationRetryTimer = schedule(after: delay) { [self] in attemptRegistration() }
             } else {
-                platformLog.notice("Giving up AX registration for \(self.identity.bundleId ?? "pid \(self.pid)", privacy: .public): \(failure.rawValue)")
+                platformLog.notice("Giving up AX registration for \(self.identity.bundleId ?? "pid \(self.pid)", privacy: .public): \(lastError.rawValue)")
             }
+        } else {
+            backoff.reset()
+        }
+        let acceptsAny = Self.requiredAppNotifications.contains { registeredAppNotifications.contains($0) }
+        guard !isRegistered else { return }
+        guard acceptsAny else {
+            finishInitialEnumeration([])
             return
         }
         isRegistered = true
-        backoff.reset()
-        registeredAppNotifications = added
         focusedWindowID = appElement.element(kAXFocusedWindowAttribute)?.windowID
         let snapshots = reconcile(discoveredByReconcile: true, collect: initialEnumeration != nil)
         finishInitialEnumeration(snapshots)
@@ -201,7 +206,7 @@ final class AppWorker: FrameWriteTarget {
 
     /// Retries registration now if it previously gave up or is waiting for its next backoff step.
     func retryRegistrationIfNeeded() {
-        guard !isRegistered else { return }
+        guard !isRegistered || Self.requiredAppNotifications.contains(where: { !registeredAppNotifications.contains($0) }) else { return }
         backoff.reset()
         attemptRegistration()
     }

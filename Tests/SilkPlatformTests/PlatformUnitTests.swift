@@ -39,12 +39,13 @@ struct EchoRingTests {
 struct RegistrationBackoffTests {
     @Test func followsTheScheduleThenRepeatsTheLastStepUntilGivingUp() {
         var backoff = RegistrationBackoff()
-        let delays = (0 ..< 40).map { _ in backoff.nextDelay() }
-        #expect(Array(delays.prefix(6)) == [0.1, 0.25, 0.5, 1, 2, 2])
+        let delays = (0 ..< 60).map { _ in backoff.nextDelay() }
+        #expect(Array(delays.prefix(20)) == Array(repeating: 0.025, count: 20))
+        #expect(Array(delays[20 ..< 26]) == [0.1, 0.25, 0.5, 1, 2, 2])
         #expect(delays.compactMap { $0 }.count == RegistrationBackoff.maxAttempts - 1)
         #expect(delays.last == .some(nil))
         backoff.reset()
-        #expect(backoff.nextDelay() == 0.1)
+        #expect(backoff.nextDelay() == 0.025)
     }
 }
 

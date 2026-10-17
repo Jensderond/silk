@@ -156,6 +156,8 @@ private final class Outbox: @unchecked Sendable {  // all state behind `lock`
 private final class AnimatorLoop: @unchecked Sendable {
     /// Grace period after a tween's deadline before the watchdog completes it.
     private static let watchdogGrace = 0.1
+    /// How far new tweens are back-dated so their first step is written immediately.
+    private static let leadInterval = 1.0 / 60
 
     private let sink: FrameSink
     private let outbox: Outbox
@@ -223,7 +225,13 @@ private final class AnimatorLoop: @unchecked Sendable {
         for index in request.moves.indices where links[request.moves[index].displayID] == nil {
             request.moves[index].displayID = primaryDisplay
         }
-        deliver(scheduler.apply(request, now: CACurrentMediaTime(), cost: cost))
+        // Start tweens one frame in the past and step them right away: the first write goes out
+        // now instead of at the next vsync (up to a frame later), and time stays monotonic.
+        let now = CACurrentMediaTime()
+        deliver(scheduler.apply(request, now: now - Self.leadInterval, cost: cost))
+        for displayID in Set(request.moves.map(\.displayID)) where scheduler.hasTweens(on: displayID) {
+            deliver(scheduler.tick(display: displayID, now: now, frameInterval: Self.leadInterval, cost: cost))
+        }
         scheduleLinksAndWatchdog()
     }
 

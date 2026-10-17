@@ -98,9 +98,9 @@ gaps.outer.right =      0
 # [animations]
 #     enabled = true
 #     duration = 180                 # window move/resize, 0-2000
-#     # 'hyprland' | 'ease-out' | 'linear' | 'spring'
+#     # 'ease-out' | 'hyprland' (overshoots slightly) | 'linear' | 'spring'
 #     # | [x1, y1, x2, y2] (cubic bezier) | { response = 0.3, damping = 1.0 } (spring, seconds)
-#     curve = 'hyprland'
+#     curve = 'ease-out'
 #     # 'move': from where the app opened the window into its tile | 'popin': grow in place | 'none'
 #     window-open = 'move'
 #     workspace-switch = 'slide'     # 'slide' | 'none'

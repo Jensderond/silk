@@ -7,7 +7,7 @@ import Testing
         #expect(config.focusBackend == .appkit)
         #expect(config.animations.enabled)
         #expect(config.animations.duration == 180)
-        #expect(config.animations.curve == .hyprland)
+        #expect(config.animations.curve == .easeOut)
         #expect(config.animations.windowOpen == .move)
         #expect(config.animations.workspaceSwitch == .slide)
         #expect(config.animations.workspaceDuration == 220)

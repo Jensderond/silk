@@ -135,6 +135,7 @@ final class AnimationBridge: SilkAnimation.FrameSink {
     }
 
     func submit(_ writes: [SilkAnimation.FrameWrite]) {
+        if Trace.isEnabled { Trace.log("submit \(writes.map { "\($0.window) \($0.frame) \($0.isFinal ? "final" : "step")" })") }
         writer.submit(writes.map { write in
             let mode: SilkPlatform.FrameWrite.Mode = switch write.mode {
                 case .final: .final

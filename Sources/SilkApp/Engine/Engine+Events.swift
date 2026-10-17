@@ -6,6 +6,7 @@ extension Engine {
     /// Routes one platform event into the core. Called on main, possibly many times per turn.
     func handle(_ event: PlatformEvent) {
         guard manager != nil else { return }
+        if Trace.isEnabled { Trace.log("event \(event.traceDescription)") }
         switch event {
             case .windowAppeared(let snapshot, _):
                 if snapshot.createdDuringMouseDrag && platform.isLeftMouseDown {
@@ -65,9 +66,11 @@ extension Engine {
                 reorderBorder()
                 updateStatusBar()
                 return
-            case .appLaunched:
+            case .appLaunched(let pid):
+                launchTimes[pid] = Date()
                 return
             case .appTerminated(let pid):
+                launchTimes[pid] = nil
                 for (id, window) in windows where window.pid == pid {
                     windows[id] = nil
                     animator.cancel(window: id)
@@ -112,6 +115,20 @@ extension Engine {
             windows[snapshot.id] = TrackedWindow(pid: snapshot.pid, lastKnownFrame: snapshot.frame)
         }
         manager.windowDetected(DetectedWindow(snapshot), isStartup: isStartup)
+        Trace.log("detected \(snapshot.id) kind \(snapshot.kind)")
         if !isStartup { scheduleFlush() }
+    }
+}
+
+private extension PlatformEvent {
+    /// One short line per event; full reflection of snapshots is far too slow to log per event.
+    var traceDescription: String {
+        switch self {
+            case .windowAppeared(let snapshot, let reconcile):
+                "windowAppeared \(snapshot.id) pid \(snapshot.pid) \(snapshot.kind) level \(snapshot.level.map(String.init) ?? "nil")\(reconcile ? " (reconcile)" : "")"
+            case .windowReclassified(let snapshot): "windowReclassified \(snapshot.id) \(snapshot.kind)"
+            case .monitorsChanged(let monitors): "monitorsChanged \(monitors.count)"
+            default: String(describing: self)
+        }
     }
 }
