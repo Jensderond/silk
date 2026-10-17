@@ -45,6 +45,8 @@ final class Engine {
     var focusFollowsMouseMonitor: Any?
     var hasConfigProblems = false
     var statusBarUpdateScheduled = false
+    /// Opens the Accessibility walkthrough (set by the app delegate).
+    var onRequestAccessibility: (() -> Void)?
     struct PendingFocus {
         let id = UUID()
         var window: UInt32

@@ -145,7 +145,12 @@ extension Engine: StatusBarActions {
     }
 
     func statusBarRequestAccessibility() {
-        _ = AccessibilityPermission.prompt()
+        onRequestAccessibility?()
+    }
+
+    /// The permission was turned off: show it in the menu bar right away.
+    func accessibilityRevoked() {
+        updateStatusBar()
     }
 
     func statusBarQuit() {

@@ -6,8 +6,8 @@ import SilkPlatform
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var engine: Engine?
-    private var permissionWait: AccessibilityPermission.Cancellable?
-    private let onboarding = MessageWindow()
+    private let onboarding = AccessibilityOnboarding()
+    private var permissionWatch: Timer?
     private var signalSources: [DispatchSourceSignal] = []
 
     private var bundleId: String { Bundle.main.bundleIdentifier ?? "dev.jensderond.silk" }
@@ -62,33 +62,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func awaitAccessibility() {
-        onboarding.show(
-            title: "Welcome to Silk",
-            heading: "Silk needs Accessibility permission to move and resize windows.",
-            body: """
-                1. Click "Open System Settings".
-                2. In Privacy & Security → Accessibility, turn on Silk.
-                3. Silk starts automatically as soon as permission is granted.
+        onboarding.show(reason: .firstLaunch, bundleId: bundleId) { [weak self] in
+            self?.launchEngine()
+        }
+    }
 
-                Silk uses the permission only to arrange windows. It doesn't read their contents, record \
-                the screen or send anything over the network.
-                """,
-            buttons: [
-                .init(title: "Quit") { NSApp.terminate(nil) },
-                .init(title: "Open System Settings", isDefault: true) {
-                    _ = AccessibilityPermission.prompt()
-                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-                        NSWorkspace.shared.open(url)
-                    }
-                },
-            ]
-        )
-        permissionWait = AccessibilityPermission.waitUntilTrusted(bundleId: bundleId) { [weak self] in
+    /// Watches for the permission being turned off while Silk runs. AX connections made without
+    /// the permission don't recover, so once it is back Silk relaunches itself.
+    private func watchAccessibility() {
+        permissionWatch = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.onboarding.close()
-                self?.permissionWait = nil
-                self?.launchEngine()
+                guard let self, !AccessibilityPermission.isTrusted, !self.onboarding.isVisible else { return }
+                self.engine?.accessibilityRevoked()
+                self.onboarding.show(reason: .revoked, bundleId: self.bundleId) { [weak self] in self?.relaunch() }
             }
+        }
+    }
+
+    /// Starts a fresh instance once this one has exited.
+    private func relaunch() {
+        let path = Bundle.main.bundleURL.path(percentEncoded: false)
+        let process = Process()
+        process.executableURL = URL(filePath: "/bin/sh")
+        process.arguments = ["-c", "while kill -0 \(ProcessInfo.processInfo.processIdentifier) 2>/dev/null; do sleep 0.1; done; open \"$0\"", path]
+        try? process.run()
+        NSApp.terminate(nil)
+    }
+
+    /// Shows the permission walkthrough again (menu bar → Grant Accessibility Permission).
+    func showAccessibilityOnboarding() {
+        onboarding.show(reason: AccessibilityPermission.isTrusted ? .firstLaunch : .revoked, bundleId: bundleId) { [weak self] in
+            self?.relaunch()
         }
     }
 
@@ -103,7 +107,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let load = configPathArgument.map { ConfigLoader.load(contentsOf: $0) } ?? ConfigLoader.load()
         let engine = Engine(configLoad: load.isFatal ? ConfigLoadResult(config: ConfigLoader.defaultConfig, url: load.url, diagnostics: load.diagnostics, isFatal: true) : load)
         self.engine = engine
+        engine.onRequestAccessibility = { [weak self] in self?.showAccessibilityOnboarding() }
         engine.start()
+        watchAccessibility()
     }
 
     // MARK: - Signals
