@@ -1,0 +1,185 @@
+import AppKit
+import SilkAnimation
+import SilkConfig
+import SilkCore
+import SilkIPC
+import SilkPlatform
+
+/// Glue between the modules: platform events drive the core, core plans drive the animator,
+/// hotkeys and IPC requests run core commands. Main thread only.
+///
+/// Latency rule: commands (hotkeys, IPC) flush the layout synchronously right after they run;
+/// platform events mark the model dirty and flush once at the end of the current main-queue turn,
+/// so a burst of AX notifications costs one layout, with no added delay.
+@MainActor
+final class Engine {
+    let platform: PlatformService
+    private(set) var manager: WindowManager!
+    let animator: Animator
+    private let animationBridge: AnimationBridge
+    private(set) var border: BorderController?
+    let hotkeys = HotkeyCenter()
+    private(set) var statusBar: StatusBarController!
+    let stateStore = StateStore()
+    let configWindow = MessageWindow()
+    var ipcServer: IPCServer?
+
+    var configURL: URL?
+    var configLoad: ConfigLoadResult
+
+    /// What the engine knows about each managed window, beyond the core's model.
+    var windows: [UInt32: TrackedWindow] = [:]
+    /// Windows created while the mouse was down (e.g. a browser tab being dragged out):
+    /// detected on mouse-up so the drag isn't disturbed.
+    var detectionsDeferredUntilMouseUp: [UInt32: WindowSnapshot] = [:]
+    var hotkeyDescriptors: [UInt32: String] = [:]
+    var isScreenLocked = false
+    var isStarted = false
+    private var flushScheduled = false
+    private var worldSaveTimer: Timer?
+    private var lastSavedWorld: FrozenWorld?
+    var lastFocusedWindow: UInt32?
+    var focusFollowsMouseMonitor: Any?
+    var hasConfigProblems = false
+
+    init(configLoad: ConfigLoadResult) {
+        self.configLoad = configLoad
+        configURL = configLoad.url
+        let config = configLoad.config
+        platform = PlatformService(focusBackend: config.focusBackend.platformBackend)
+        animationBridge = AnimationBridge(writer: platform.writer)
+        animator = Animator(sink: animationBridge, settings: AnimationSettings(config.animations))
+        statusBar = StatusBarController(actions: self)
+    }
+
+    // MARK: - Startup
+
+    /// Starts observing the system, restores state from a previous run, enumerates existing
+    /// windows and starts accepting hotkeys and CLI requests.
+    func start() {
+        let config = configLoad.config
+        platform.start { [weak self] event in self?.handle(event) }
+        manager = WindowManager(
+            config: config,
+            configURL: configURL,
+            platform: self,
+            monitors: platform.monitors.map(Monitor.init)
+        )
+        manager.delegate = self
+
+        animator.onFrame = { [weak self] window, frame in self?.animationFrame(window: window, frame: frame) }
+        animator.onComplete = { [weak self] window, epoch in self?.animationCompleted(window: window, epoch: epoch) }
+        applyAppearanceSettings(config)
+
+        restoreStrandedWindows()
+        if let frozen = loadFrozenWorld() { manager.restore(frozen) }
+
+        startIPC()
+        platform.enumerateAll { [weak self] snapshots in
+            guard let self else { return }
+            for snapshot in snapshots { self.detect(snapshot, isStartup: true) }
+            self.manager.finishStartup()
+            self.isStarted = true
+            self.flush()
+        }
+        registerHotkeys()
+        reportConfigProblems(configLoad, manager.configDiagnostics)
+        updateStatusBar()
+        LoginItem.set(enabled: config.startAtLogin)
+        warnAboutStageManager()
+
+        worldSaveTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.saveWorldIfChanged() }
+        }
+    }
+
+    // MARK: - Layout flush
+
+    /// Requests a flush at the end of the current main-queue turn (coalesces event bursts).
+    func scheduleFlush() {
+        guard !flushScheduled else { return }
+        flushScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.flushScheduled = false
+            self.flush()
+        }
+    }
+
+    /// Computes the core's plan and hands every change to the animator.
+    func flush() {
+        guard isStarted, !isScreenLocked, manager.needsLayout else { return }
+        let plan = manager.computeLayout()
+        let request = makeAnimationRequest(for: plan)
+        if !request.moves.isEmpty || !request.snaps.isEmpty {
+            animator.apply(request)
+        }
+        updateFocusBorder(plan)
+        recordHiddenWindows()
+    }
+
+    // MARK: - Persistence
+
+    private struct WorldEnvelope: Codable {
+        var session: String
+        var world: FrozenWorld
+    }
+
+    private func loadFrozenWorld() -> FrozenWorld? {
+        guard let data = stateStore.loadWorld(),
+              let envelope = try? JSONDecoder().decode(WorldEnvelope.self, from: data),
+              envelope.session == StateStore.sessionID
+        else { return nil }
+        return envelope.world
+    }
+
+    func saveWorldIfChanged() {
+        guard isStarted else { return }
+        let world = manager.frozenWorld()
+        guard world != lastSavedWorld,
+              let data = try? JSONEncoder().encode(WorldEnvelope(session: StateStore.sessionID, world: world))
+        else { return }
+        lastSavedWorld = world
+        stateStore.saveWorld(data)
+    }
+
+    /// Windows a crashed or killed previous run left parked in a corner go back on screen first,
+    /// so startup detection sees them where the user expects them.
+    private func restoreStrandedWindows() {
+        let stranded = stateStore.loadStrandedWindows()
+        guard !stranded.isEmpty else { return }
+        let frames = stranded.map { ($0.windowID, $0.restoreFrame) }
+        _ = platform.writeSynchronously(frames, deadline: .now() + 1)
+        stateStore.recordHidden([:])
+    }
+
+    // MARK: - Termination
+
+    /// Puts every hidden window back on screen. Called on quit, signals and disable.
+    func restoreHiddenWindowsSynchronously() {
+        guard manager != nil else { return }
+        animator.snapAll()
+        let terminationFrames = manager.terminationFrames()
+        let frames: [(UInt32, CGRect)] = windows.compactMap { id, window in
+            guard window.isHidden else { return nil }
+            return (id, window.lastVisibleFrame ?? terminationFrames[id] ?? window.lastKnownFrame ?? .zero)
+        }.filter { $0.1 != .zero }
+        if !frames.isEmpty {
+            _ = platform.writeSynchronously(frames, deadline: .now() + 1.5)
+        }
+        stateStore.recordHidden([:])
+        saveWorldIfChanged()
+        stateStore.flush()
+    }
+
+    func setBorder(_ controller: BorderController?) {
+        border = controller
+    }
+
+    func shutdown() {
+        restoreHiddenWindowsSynchronously()
+        hotkeys.unregisterAll()
+        ipcServer?.stop()
+        platform.stop()
+    }
+}

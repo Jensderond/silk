@@ -29,6 +29,7 @@ struct MenuBarState: Equatable {
 }
 
 /// Actions the menu can trigger. Implemented by the engine.
+@MainActor
 protocol StatusBarActions: AnyObject {
     func statusBarFocusWorkspace(_ name: String)
     func statusBarToggleEnabled()
@@ -40,6 +41,7 @@ protocol StatusBarActions: AnyObject {
     func statusBarQuit()
 }
 
+@MainActor
 final class StatusBarController: NSObject, NSMenuDelegate {
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private weak var actions: StatusBarActions?
