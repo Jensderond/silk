@@ -28,10 +28,9 @@ public enum DefaultOrientation: String, Equatable, Sendable, CaseIterable {
 public enum MonitorPattern: Equatable, Sendable {
     case main
     case secondary
-    case builtIn
     /// 1-based, ordered left-to-right then top-to-bottom (AeroSpace's `sequence-number`).
     case sequenceNumber(Int)
-    /// Case-insensitive regex matched against the monitor name.
+    /// Case-insensitive regex substring match against the monitor name (e.g. 'built-in', 'dell').
     case nameRegex(String)
 }
 
@@ -96,6 +95,12 @@ public struct Mode: Equatable, Sendable {
     /// Keyed by `Binding.descriptor`, insertion order irrelevant.
     public var bindings: [String: Binding]
     public init(name: String, bindings: [String: Binding] = [:]) { self.name = name; self.bindings = bindings }
+
+    /// Looks a binding up the way `trigger-binding` does: by the descriptor as written in the config,
+    /// falling back to the normalized form (`shift-alt-h` finds `alt-shift-h`).
+    public func binding(named descriptor: String) -> Binding? {
+        bindings[descriptor] ?? bindings.values.first { $0.chord.normalizedDescriptor == descriptor }
+    }
 }
 
 public enum KeyMappingPreset: String, Equatable, Sendable, CaseIterable {
@@ -121,7 +126,11 @@ public struct WindowDetectedMatcher: Equatable, Sendable {
 }
 
 public struct WindowDetectedRule: Equatable, Sendable {
+    /// Legacy `if.*` table matcher (AeroSpace soft-deprecated it, but it is still widely used).
     public var matcher = WindowDetectedMatcher()
+    /// `if = 'test %{app-bundle-id} = com.foo'`: a command script whose exit code decides the match.
+    /// When set, `matcher` is empty; when neither is set, the rule matches every window.
+    public var ifCommand: String?
     public var checkFurtherCallbacks = false
     public var run = CommandScripts.empty
     public init() {}
@@ -129,9 +138,17 @@ public struct WindowDetectedRule: Equatable, Sendable {
 
 public struct ExecConfig: Equatable, Sendable {
     public var inheritEnvVars = true
-    /// Values may reference other variables as `${VAR}`; expansion happens at exec time.
+    /// `[exec.env-vars]`. Values may reference other variables as `${VAR}`; expansion happens at exec time
+    /// (see `environment(processEnvironment:)`).
     public var env: [String: String] = [:]
     public init() {}
+
+    /// Used when the config has no `[exec]` table: GUI apps don't get Homebrew's prefix in `PATH` (AeroSpace rule).
+    public static let fallback: ExecConfig = {
+        var config = ExecConfig()
+        config.env = ["PATH": "/opt/homebrew/bin:/opt/homebrew/sbin:${PATH}"]
+        return config
+    }()
 }
 
 // MARK: Silk extensions
@@ -146,10 +163,16 @@ public enum AnimationCurve: Equatable, Sendable {
     /// Hyprland's default curve (`bezier = myBezier, 0.05, 0.9, 0.1, 1.05`).
     public static let hyprland = AnimationCurve.bezier(0.05, 0.9, 0.1, 1.05)
     public static let easeOut = AnimationCurve.bezier(0.16, 1, 0.3, 1)
+    /// `curve = 'spring'`: critically damped, settles in roughly `response` seconds.
+    public static let defaultSpring = AnimationCurve.spring(response: 0.3, damping: 1.0)
 }
 
 public enum WindowOpenAnimation: String, Equatable, Sendable, CaseIterable {
-    case popin, none
+    /// Animate from the frame the app initially opened the window at into its tile.
+    case move
+    /// Grow from ~85 % centered in the tile.
+    case popin
+    case none
 }
 
 public enum WorkspaceSwitchAnimation: String, Equatable, Sendable, CaseIterable {
@@ -161,10 +184,12 @@ public struct AnimationConfig: Equatable, Sendable {
     /// Milliseconds for window move/resize animations.
     public var duration = 180
     public var curve: AnimationCurve = .hyprland
-    public var windowOpen: WindowOpenAnimation = .popin
+    public var windowOpen: WindowOpenAnimation = .move
     public var workspaceSwitch: WorkspaceSwitchAnimation = .slide
     /// Milliseconds for workspace switch animations.
     public var workspaceDuration = 220
+    /// Skip animations while System Settings › Accessibility › Display › Reduce motion is on.
+    public var respectReduceMotion = true
     public init() {}
 }
 
@@ -176,12 +201,18 @@ public struct RGBAColor: Equatable, Sendable {
 }
 
 public struct BorderConfig: Equatable, Sendable {
-    public var enabled = true
+    /// Borders are an opt-in extra.
+    public var enabled = false
     public var width = 2.0
     public var activeColor = RGBAColor(red: 0x89 / 255, green: 0xB4 / 255, blue: 0xFA / 255)
-    /// Corner radius in points. macOS 26 standard windows use ~16pt.
-    public var radius = 16.0
+    /// Corner radius in points; nil = 'auto' (calibrated at runtime to the focused window's corner radius).
+    public var radius: Double?
     public init() {}
+}
+
+/// How Silk focuses windows: AppKit/AX only, or SkyLight private calls (faster, more reliable across apps).
+public enum FocusBackend: String, Equatable, Sendable, CaseIterable {
+    case appkit, skylight
 }
 
 // MARK: Root
@@ -205,7 +236,7 @@ public struct Config: Equatable, Sendable {
     public var onModeChanged = CommandScripts.empty
     public var focusFollowsMouse = false
     public var keyMapping = KeyMapping()
-    public var exec = ExecConfig()
+    public var exec = ExecConfig.fallback
     public var gaps = Gaps()
     /// Workspace name → candidate monitors, first available wins.
     public var workspaceToMonitorForceAssignment: [String: [MonitorPattern]] = [:]
@@ -213,6 +244,7 @@ public struct Config: Equatable, Sendable {
     public var modes: [String: Mode] = ["main": Mode(name: "main")]
     public var onWindowDetected: [WindowDetectedRule] = []
 
+    public var focusBackend: FocusBackend = .appkit
     public var animations = AnimationConfig()
     public var borders = BorderConfig()
 

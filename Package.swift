@@ -23,6 +23,7 @@ let package = Package(
         .target(
             name: "SilkConfig",
             dependencies: [.product(name: "TOMLDecoder", package: "TOMLDecoder")],
+            resources: [.process("Resources")],
             swiftSettings: swiftSettings
         ),
         .target(name: "SilkCore", dependencies: ["SilkConfig"], swiftSettings: swiftSettings),
@@ -35,7 +36,12 @@ let package = Package(
             swiftSettings: swiftSettings
         ),
         .executableTarget(name: "silk", dependencies: ["SilkIPC"], swiftSettings: swiftSettings),
-        .testTarget(name: "SilkConfigTests", dependencies: ["SilkConfig"], swiftSettings: swiftSettings),
+        .testTarget(
+            name: "SilkConfigTests",
+            dependencies: ["SilkConfig"],
+            resources: [.copy("Fixtures")],
+            swiftSettings: swiftSettings
+        ),
         .testTarget(name: "SilkCoreTests", dependencies: ["SilkCore"], swiftSettings: swiftSettings),
         .testTarget(name: "SilkAnimationTests", dependencies: ["SilkAnimation"], swiftSettings: swiftSettings),
     ]
