@@ -57,8 +57,10 @@ Rules:
   Windows still valid but absent and off-screen are **ordered out** (keep tree slot
   info, drop from layout, reinsert when they reappear).
 * **Per-app threads**, one `AXObserver` per app, `AXUIElementSetMessagingTimeout` 1 s on
-  app and window elements. Observer registration retries with backoff
-  (100/250/500/1000/2000 ms) until the app finished launching.
+  app and window elements. Observer registration polls every 25 ms for the first half
+  second of an app's launch, then backs off (100/250/500/1000/2000 ms). Like AeroSpace,
+  an app counts as registered once any required notification is accepted; missing ones
+  are retried, with a reconcile when they arrive.
 * **Echo suppression.** Each window keeps a ring of its last 8 written frames. A moved/
   resized notification whose read-back frame matches a ring entry (±1 pt, <500 ms) is ours
   and dropped. Otherwise: left mouse down + window is focused → **user manipulation**;
@@ -222,9 +224,18 @@ Animation rules (owned by SilkAnimation):
 * Intermediate writes: shrinking → size then position; growing → position then size.
   Final: `size, position, size`, then one read-back.
 * Overshooting curves apply overshoot to position only; size is clamped to [from, to].
-* Workspace switch = position-only slides (sizes applied while hidden first). Slide
-  axis never crosses into a neighbouring monitor; top edge impossible (menu bar clamp);
-  no free edge → instant. Outgoing windows park in AeroSpace's hide corner.
+  The default curve is ease-out without overshoot: tiles sit one gap from the screen
+  edges, and the window server clamps a window that overshoots into the menu bar.
+* New tweens are back-dated one frame and stepped immediately, so the first write goes
+  out with the request instead of at the next vsync.
+* Workspace switch: incoming windows slide the last 20 % of the monitor into place
+  (position only) and are raised, focused last; outgoing windows park in AeroSpace's
+  hide corner one frame later, so the desktop never flashes. A full slide-out is not
+  possible: macOS keeps 40 pt of a window on screen at the left edge, 1 pt at the right
+  and 32 pt at the bottom, so outgoing windows would bunch up at the edge. Slide
+  direction never crosses into a neighbouring monitor; no free edge → instant.
+* The first window of an app launched in the last 1.5 s snaps into its tile: a launching
+  app applies AX writes too slowly for a smooth tween, and one jump lands sooner.
 * `AXEnhancedUserInterface` is cleared once per app at animation start and restored at end.
 * Reduce Motion (when `respect-reduce-motion`) → everything snaps.
 
