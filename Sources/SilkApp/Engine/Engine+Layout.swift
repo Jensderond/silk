@@ -26,8 +26,12 @@ extension Engine {
     static let launchSettleTime: TimeInterval = 1.5
 
     /// Translates a complete plan into the moves and snaps that actually change something.
-    func makeAnimationRequest(for plan: LayoutPlan) -> AnimationRequest {
+    /// `parks` hides windows that just left the screen; apply it after `request` (see `flush`).
+    /// `revealed` lists windows that came back on screen from a hidden workspace.
+    func makeAnimationRequest(for plan: LayoutPlan) -> (request: AnimationRequest, parks: AnimationRequest, revealed: [UInt32]) {
         var request = AnimationRequest(epoch: plan.epoch)
+        var parks = AnimationRequest(epoch: plan.epoch)
+        var revealed: [UInt32] = []
         let config = manager.config
         let monitors = platform.monitors
         let switches = slidingSwitches(plan, monitors: monitors)
@@ -43,6 +47,7 @@ extension Engine {
             window.isHidden = false
             window.target = target
             window.lastVisibleFrame = target
+            if wasHidden { revealed.append(id) }
             // The window already sits there (floating window adopting its own frame, restored layout)
             if !wasHidden, let known = window.lastKnownFrame, known.isClose(to: target) { continue }
             // Only the app moved it: re-assert the tile, unless the app keeps fighting back
@@ -80,16 +85,15 @@ extension Engine {
             let wasVisible = !window.isHidden
             window.isHidden = true
             window.target = parked
-            if wasVisible, let current = animator.presentedFrame(window: id) ?? window.lastKnownFrame,
-               let slide = switches.outgoing(monitor: hide.monitor) {
-                let exit = slide.exitFrame(for: current)
-                let displayID = monitors.first { $0.id == hide.monitor }?.displayID ?? CGMainDisplayID()
-                request.moves.append(.init(window: id, pid: window.pid, from: current, to: exit, kind: .workspaceOut, displayID: displayID, then: parked))
+            // Windows leaving the screen park without sliding: macOS keeps 40 pt of a window on screen
+            // at the left edge and 1 pt at the right, so a slide-out would bunch them up at the edge.
+            if wasVisible {
+                parks.snaps.append(.init(window: id, frame: parked))
             } else {
                 request.snaps.append(.init(window: id, frame: parked))
             }
         }
-        return request
+        return (request, parks, revealed)
     }
 
     /// Apps launched in the last 1.5 s are still busy and apply AX frame writes slowly.
@@ -154,54 +158,50 @@ extension Engine {
     // MARK: - Hide ledger
 
     func recordHiddenWindows() {
+        stateStore.recordHidden(restoreFramesForHiddenWindows())
+    }
+
+    /// Where each hidden window goes if Silk stops: its last on-screen frame, or (never shown during
+    /// this run) centred on its monitor. Never the parked position itself.
+    func restoreFramesForHiddenWindows() -> [UInt32: StateStore.HiddenWindow] {
+        let hidden = windows.filter { $0.value.isHidden }
+        guard !hidden.isEmpty else { return [:] }
+        let fallback = hidden.contains { $0.value.lastVisibleFrame == nil } ? manager.terminationFrames() : [:]
         var ledger: [UInt32: StateStore.HiddenWindow] = [:]
-        for (id, window) in windows where window.isHidden {
-            guard let restore = window.lastVisibleFrame ?? window.lastKnownFrame else { continue }
+        for (id, window) in hidden {
+            guard let restore = window.lastVisibleFrame ?? fallback[id] else { continue }
             ledger[id] = StateStore.HiddenWindow(windowID: id, pid: window.pid, bundleID: nil, restoreFrame: restore)
         }
-        stateStore.recordHidden(ledger)
+        return ledger
     }
 }
 
 /// A workspace switch that slides, with the geometry of its monitor.
 struct Slide {
+    /// How far incoming windows travel, as a fraction of the monitor size.
+    static let distance: CGFloat = 0.2
+
     var monitor: MonitorID
     var frame: CGRect
     var direction: SlideDirection
 
-    /// Where an incoming window starts: one monitor width/height away, but never fully off
-    /// screen (the window server rejects or clamps that), so at least 1 pt stays visible.
+    /// Where an incoming window starts: offset against the slide direction, clamped to what the
+    /// window server accepts (40 pt visible at the left edge, 1 pt at the right, 32 pt at the bottom).
     func entryFrame(for target: CGRect, size: CGSize) -> CGRect {
         var origin = target.origin
         switch direction {
-            case .left: origin.x = min(target.minX + frame.width, frame.maxX - 1)
-            case .right: origin.x = max(target.minX - frame.width, frame.minX - size.width + 1)
-            case .down: origin.y = min(target.minY + frame.height, frame.maxY - 1)
+            case .left: origin.x = min(target.minX + frame.width * Self.distance, frame.maxX - 1)
+            case .right: origin.x = max(target.minX - frame.width * Self.distance, frame.minX - size.width + 40)
+            case .down: origin.y = min(target.minY + frame.height * Self.distance, frame.maxY - 32)
             case .none: break
         }
         return CGRect(origin: origin, size: size)
-    }
-
-    /// Where an outgoing window slides to before it is parked in the hide corner.
-    func exitFrame(for current: CGRect) -> CGRect {
-        var origin = current.origin
-        switch direction {
-            case .left: origin.x = max(current.minX - frame.width, frame.minX - current.width + 1)
-            case .right: origin.x = min(current.minX + frame.width, frame.maxX - 1)
-            case .down: origin.y = min(current.minY + frame.height, frame.maxY - 1)
-            case .none: break
-        }
-        return CGRect(origin: origin, size: current.size)
     }
 }
 
 extension [Slide] {
     func incoming(_ target: CGRect) -> Slide? {
         first { $0.frame.contains(CGPoint(x: target.midX, y: target.midY)) }
-    }
-
-    func outgoing(monitor: MonitorID) -> Slide? {
-        first { $0.monitor == monitor }
     }
 }
 

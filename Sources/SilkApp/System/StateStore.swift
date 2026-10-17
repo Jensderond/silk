@@ -81,12 +81,15 @@ final class StateStore {
         }
     }
 
-    /// Identifies the login session (session id + boot time): window ids are unique only within it.
+    /// Identifies the login session: window ids are unique only within it. The session UUID
+    /// changes on every login; boot time is the fallback if it is ever missing.
     static let sessionID: String = {
+        if let uuid = (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionUniqueSessionUUID"] as? String {
+            return uuid
+        }
         var bootTime = timeval()
         var size = MemoryLayout<timeval>.size
         sysctlbyname("kern.boottime", &bootTime, &size, nil, 0)
-        let session = (CGSessionCopyCurrentDictionary() as? [String: Any])?["kCGSSessionIDKey"].map { "\($0)" } ?? "0"
-        return "\(session)-\(bootTime.tv_sec)"
+        return "boot-\(bootTime.tv_sec)"
     }()
 }

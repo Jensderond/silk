@@ -59,6 +59,7 @@ extension Engine {
                 manager.applied(window: id, presentedFrame: frame)
                 return
             case .focusedWindowChanged(let pid, let window):
+                guard acceptNativeFocus(window) else { return }
                 manager.nativeFocusChanged(window: window, pid: pid)
                 reorderBorder()
                 updateStatusBar()
@@ -106,6 +107,20 @@ extension Engine {
                 return
         }
         scheduleFlush()
+    }
+
+    /// After Silk asks macOS to focus a window, focus reports naming other windows are stale: they
+    /// come from earlier activations that slow apps deliver late. Following them would yank focus
+    /// (and the visible workspace) away from what the user just chose. They are ignored until macOS
+    /// confirms the requested window, or briefly if it never does.
+    private func acceptNativeFocus(_ window: UInt32?) -> Bool {
+        guard let pending = pendingFocus else { return true }
+        if window == pending.window || Date() > pending.deadline {
+            pendingFocus = nil
+            return true
+        }
+        Trace.log("ignoring stale native focus \(window.map(String.init) ?? "nil"), waiting for \(pending.window)")
+        return false
     }
 
     /// Registers a discovered window with the engine and the core.

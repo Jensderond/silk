@@ -36,12 +36,21 @@ final class Engine {
     var isScreenLocked = false
     var isStarted = false
     private var flushScheduled = false
+    /// One frame: incoming windows get drawn before outgoing ones are hidden.
+    static let parkDelay: TimeInterval = 0.016
     private var worldSaveTimer: Timer?
     private var lastSavedWorld: FrozenWorld?
     var lastFocusedWindow: UInt32?
     var focusFollowsMouseMonitor: Any?
     var hasConfigProblems = false
     var statusBarUpdateScheduled = false
+    struct PendingFocus {
+        var window: UInt32
+        var deadline: Date
+    }
+    /// The window Silk last asked macOS to focus, until macOS confirms it.
+    var pendingFocus: PendingFocus?
+    static let focusConfirmationTimeout: TimeInterval = 0.4
     /// When each app was launched (only apps launched while Silk runs).
     var launchTimes: [pid_t: Date] = [:]
 
@@ -114,10 +123,30 @@ final class Engine {
         guard isStarted, !isScreenLocked, manager.needsLayout else { return }
         Trace.log("flush begins")
         let plan = manager.computeLayout()
-        let request = makeAnimationRequest(for: plan)
-        Trace.log("flush epoch \(plan.epoch): \(request.moves.map { "\($0.window) \($0.kind) \($0.from) → \($0.to)" }) snaps \(request.snaps.map(\.window))")
+        let (request, parks, revealed) = makeAnimationRequest(for: plan)
+        Trace.log("flush epoch \(plan.epoch): \(request.moves.map { "\($0.window) \($0.kind) \($0.from) → \($0.to)" }) snaps \(request.snaps.map(\.window)) parks \(parks.snaps.map(\.window))")
         if !request.moves.isEmpty || !request.snaps.isEmpty {
             animator.apply(request)
+        }
+        // Windows coming back from a hidden workspace are behind whatever was on screen; raise them
+        // (the focused one last) so all of them are seen sliding in, not just the focused one.
+        if !plan.workspaceSwitches.isEmpty {
+            for id in revealed where id != plan.focusedWindow { platform.raise(window: id) }
+            if let focused = plan.focusedWindow, revealed.contains(focused) { platform.raise(window: focused) }
+        }
+        if !parks.snaps.isEmpty {
+            // Like AeroSpace, show the incoming windows before hiding the outgoing ones, so a
+            // workspace switch never flashes the desktop. The frame writer drops these writes if a
+            // newer plan targeted the window in the meantime (older epoch).
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.parkDelay) { [weak self] in
+                guard let self else { return }
+                var current = parks
+                current.snaps = parks.snaps.filter { snap in
+                    guard let window = self.windows[snap.window], window.isHidden else { return false }
+                    return window.target?.origin.isClose(to: snap.frame.origin) == true
+                }
+                if !current.snaps.isEmpty { self.animator.apply(current) }
+            }
         }
         updateFocusBorder(plan)
         recordHiddenWindows()
@@ -164,11 +193,7 @@ final class Engine {
     func restoreHiddenWindowsSynchronously() {
         guard manager != nil else { return }
         animator.snapAll()
-        let terminationFrames = manager.terminationFrames()
-        let frames: [(UInt32, CGRect)] = windows.compactMap { id, window in
-            guard window.isHidden else { return nil }
-            return (id, window.lastVisibleFrame ?? terminationFrames[id] ?? window.lastKnownFrame ?? .zero)
-        }.filter { $0.1 != .zero }
+        let frames = restoreFramesForHiddenWindows().map { ($0.key, $0.value.restoreFrame) }
         if !frames.isEmpty {
             _ = platform.writeSynchronously(frames, deadline: .now() + 1.5)
         }

@@ -106,6 +106,7 @@ extension Engine: StatusBarActions {
         }
         var state = MenuBarState()
         state.status = AccessibilityPermission.isTrusted ? (model.isEnabled ? .running : .disabled) : .needsAccessibility
+        state.text = model.text
         state.mode = model.mode.flatMap { $0 == "main" ? nil : $0 }
         state.visibleWorkspaces = model.visibleWorkspaces.compactMap { name in workspaces.first { $0.name == name } }
         state.workspaces = workspaces

@@ -18,6 +18,8 @@ struct MenuBarState: Equatable {
     }
 
     var status: Status = .needsAccessibility
+    /// AeroSpace's tray text, e.g. `(S) *1 │ 10`: the default (monospaced text) label.
+    var text = ""
     /// Non-main binding mode, shown as a badge before the workspaces.
     var mode: String?
     /// Visible workspace per monitor, ordered like the monitors (left to right).
@@ -43,9 +45,17 @@ protocol StatusBarActions: AnyObject {
 
 @MainActor
 final class StatusBarController: NSObject, NSMenuDelegate {
+    /// AeroSpace's label styles; text is AeroSpace's default.
+    enum Style: String, CaseIterable {
+        case text, squares
+        var title: String { self == .text ? "Monospaced Text" : "Squares" }
+    }
+
+    private static let styleKey = "menuBarStyle"
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private weak var actions: StatusBarActions?
     private var state = MenuBarState()
+    private var style = Style(rawValue: UserDefaults.standard.string(forKey: StatusBarController.styleKey) ?? "") ?? .text
 
     init(actions: StatusBarActions) {
         self.actions = actions
@@ -58,7 +68,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     func update(_ newState: MenuBarState) {
         guard newState != state else { return }
-        let labelChanged = newState.status != state.status || newState.mode != state.mode
+        let labelChanged = newState.status != state.status || newState.mode != state.mode || newState.text != state.text
             || newState.visibleWorkspaces != state.visibleWorkspaces || newState.secureInputActive != state.secureInputActive
         state = newState
         if labelChanged { render() }
@@ -68,8 +78,18 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     private func render() {
         guard let button = item.button else { return }
-        button.image = StatusBarLabel.image(for: state)
-        button.imagePosition = .imageOnly
+        if style == .text, state.status == .running, !state.text.isEmpty {
+            button.image = state.secureInputActive ? StatusBarLabel.lockImage : nil
+            button.imagePosition = .imageLeading
+            button.attributedTitle = NSAttributedString(
+                string: state.text,
+                attributes: [.font: NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)]
+            )
+        } else {
+            button.title = ""
+            button.image = StatusBarLabel.image(for: state)
+            button.imagePosition = .imageOnly
+        }
         button.toolTip = tooltip
         button.setAccessibilityLabel(tooltip)
     }
@@ -128,6 +148,16 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                 let login = actionItem("Launch at Login", #selector(toggleLaunchAtLogin))
                 login.state = state.launchAtLogin ? .on : .off
                 menu.addItem(login)
+                let styles = NSMenu()
+                for option in Style.allCases {
+                    let entry = actionItem(option.title, #selector(selectStyle(_:)))
+                    entry.representedObject = option.rawValue
+                    entry.state = option == style ? .on : .off
+                    styles.addItem(entry)
+                }
+                let styleItem = NSMenuItem(title: "Menu Bar Style", action: nil, keyEquivalent: "")
+                styleItem.submenu = styles
+                menu.addItem(styleItem)
         }
         menu.addItem(.separator())
         menu.addItem(actionItem("Quit Silk", #selector(quit), key: "q"))
@@ -156,6 +186,12 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     @objc private func requestAccessibility() { actions?.statusBarRequestAccessibility() }
     @objc private func toggleLaunchAtLogin() { actions?.statusBarToggleLaunchAtLogin() }
     @objc private func quit() { actions?.statusBarQuit() }
+    @objc private func selectStyle(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let selected = Style(rawValue: raw) else { return }
+        style = selected
+        UserDefaults.standard.set(raw, forKey: Self.styleKey)
+        render()
+    }
 }
 
 /// Draws the menu bar label: one SF Symbol per visible workspace (`1.square.fill` for the
@@ -172,7 +208,7 @@ enum StatusBarLabel {
         }
         var parts: [NSImage] = []
         if state.secureInputActive { parts.append(symbol("lock.fill")) }
-        if let mode = state.mode { parts.append(glyph(for: mode, style: .mode)) }
+        if let initial = state.mode?.first { parts.append(glyph(for: String(initial).uppercased(), style: .mode)) }
         for workspace in state.visibleWorkspaces {
             let style: GlyphStyle = workspace.isFocused || state.visibleWorkspaces.count == 1 ? .focused : .visible
             parts.append(glyph(for: workspace.name, style: style, fullscreen: workspace.hasFullscreenWindows))
@@ -208,6 +244,8 @@ enum StatusBarLabel {
             case .visible: return "\(lower).\(shape)"
         }
     }
+
+    static var lockImage: NSImage { symbol("lock.fill") }
 
     private static func symbol(_ name: String) -> NSImage {
         let image = symbolImage(name) ?? NSImage(size: NSSize(width: height, height: height))

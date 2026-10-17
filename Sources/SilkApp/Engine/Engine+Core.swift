@@ -8,6 +8,7 @@ import SilkPlatform
 
 extension Engine: @preconcurrency PlatformActions {
     func focus(window: WindowID, pid: pid_t) {
+        pendingFocus = PendingFocus(window: window, deadline: Date().addingTimeInterval(Self.focusConfirmationTimeout))
         platform.focus(window: window, pid: pid)
     }
 
