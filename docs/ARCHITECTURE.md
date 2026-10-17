@@ -1,218 +1,241 @@
 # Silk — architecture
 
-Silk is a tiling window manager for macOS. It keeps AeroSpace's model, commands,
-config format and CLI (it reads `~/.aerospace.toml` unmodified), and adds two things:
+Silk is a tiling window manager for macOS. Goal: **AeroSpace's functionality, unchanged**
+(same tree model, commands, config file, CLI, wire protocol — it reads `~/.aerospace.toml`
+as-is and the brew `aerospace` CLI talks to it), but **faster** and **smoother**:
 
 1. **Latency.** A newly created window is placed in its tile within one AX round-trip
-   of the `kAXWindowCreatedNotification`, never after a "refresh storm" settles.
-2. **Motion.** Window moves/resizes, window open, and workspace switches are animated
-   (Hyprland-style curves), with a GPU-drawn focus border that moves in perfect sync.
+   of `kAXWindowCreatedNotification` (budget ≈ 10–40 ms), never after a refresh storm settles.
+2. **Motion.** Window moves/resizes, window open and workspace switches animate with
+   Hyprland-style curves. Optional (default off) GPU-drawn focus border.
 
-No SIP changes, no scripting additions. Public AX APIs + `_AXUIElementGetWindow`
-(stable private symbol used by every macOS WM).
+No SIP changes, no scripting additions. Public AX APIs + `_AXUIElementGetWindow`.
 
-## Why AeroSpace feels slow when a window appears
+## Why AeroSpace is slow to place new windows
 
-Every AX notification in AeroSpace calls `scheduleCancellableCompleteRefreshSession`,
-which **cancels** the in-flight refresh and starts a new one that re-queries the
-window list of *every* running app (`refreshAllAndGetAliveWindowIds`) before laying out.
-A window being created emits a burst (created, focused-changed, main-changed, moved,
-resized, title-changed …) and app activation emits more, so the refresh keeps being
-cancelled and restarted. The window is placed only after the burst quiets down and
-one full refresh completes — commonly 150 ms – 1 s.
+Verified in AeroSpace source (`layout/refresh.swift`, `tree/MacApp.swift`):
 
-## Silk's answer: incremental, event-carrying pipeline
+* Every AX notification → `scheduleCancellableCompleteRefreshSession` → **cancels** the
+  in-flight refresh and starts a full one: `kAXWindows` for every app, `_AXUIElementGetWindow`
+  per known window, `AXFullScreen` + `AXMinimized` reads for every window, sequentially
+  awaited on main. Latency = sum over all apps.
+* `layoutRecursive` writes `size,pos,size` to every visible window on every refresh, no diff.
+* Those writes echo `kAXMoved`/`kAXResized`, which cancel and restart the refresh again.
+* New windows are ignored while the left mouse button is down.
+* No `AXUIElementSetMessagingTimeout` → a beachballing app stalls each refresh up to 6 s.
+
+The hard floor: `kAXWindowCreated` arrives after the window is already on screen at the
+app's chosen frame, so 1–3 frames at the "wrong" position are unavoidable without a
+compositor. Silk turns that jump into a short animated move from the initial frame.
+
+## Pipeline
 
 ```
- per-app AX thread (SilkPlatform)            main thread (SilkApp glue + SilkCore)            display link (SilkAnimation)
- ───────────────────────────────            ───────────────────────────────────────           ────────────────────────────
- AXObserver callback                         PlatformEvent queue (FIFO, per turn)
-   kAXWindowCreated(elem) ───snapshot───▶    world.windowDetected(info)    ──┐
-   (1 batched AX read: role, subrole,                                       │ mark dirty
-    frame, buttons, title, id)                                              ▼
-                                             end of runloop turn: world.computeLayout()
-                                               -> LayoutPlan (pure, diffed)  ──▶  Animator.apply(plan)
-                                                                                     │ per tick: interpolate
-                                                                                     ▼
- FrameSink.submit (latest-wins, per window) ◀──────────────────────────────────── frames
-   AXUIElementSetAttributeValue (size,pos)
+per-app AX thread (SilkPlatform)        main thread (SilkApp Engine + SilkCore)         animator thread (SilkAnimation)
+────────────────────────────────        ────────────────────────────────────────        ───────────────────────────────
+AXObserver (1 per app)                   PlatformEvent ─▶ WindowManager mutation
+ kAXWindowCreated(elem)                  first event in a turn schedules ONE
+   └ batched snapshot read ──event──▶    DispatchQueue.main.async { flush() }
+ kAXMoved/kAXResized                     flush(): plan = wm.computeLayout() (diffed)
+   └ echo filter (ring of our writes)       └──── apply(plan, epoch) ─────────────────▶  per-window tweens, display link
+                                                                                         per screen (NSScreen.displayLink)
+FrameWriter.submit (latest-wins,  ◀──────────────────── batches of FrameWrite ─────────  per-app budget from measured
+  epoch-checked, per window)                                                            write latency (EMA)
 ```
 
 Rules:
 
-* **Events carry data.** The AX callback reads everything needed to classify and place
-  the window (one `AXUIElementCopyMultipleAttributeValues`) on the app's own thread and
-  posts a value snapshot. Main never blocks on AX.
-* **No cancellation storms.** Events mutate the model incrementally. Layout is computed
-  once per main-runloop turn (coalesced via a `CFRunLoopObserver` on `.beforeWaiting`),
-  so a burst of 10 events in one turn = 1 layout, with zero added delay.
-* **Reconciliation is a background safety net**, not the primary path: on app
-  activation, on mouse-up, on wake/screen change, and on a slow timer (2 s, only while
-  something changed recently), each app worker diffs its `kAXWindows` against known
-  windows and emits created/destroyed events for anything missed.
-* **Per-app threads.** Each app gets a dedicated thread with its own CFRunLoop hosting
-  its AXObserver and executing all AX calls for that app. A hung app (beachball) never
-  delays other apps or the main thread. `AXUIElementSetMessagingTimeout` = 1 s per app.
-* **Latest-wins frame submission.** Each worker holds at most one pending frame per
-  window. If the app is slow to apply frame N, frame N+1 replaces it; we never build a
-  backlog (backlogs are what make AX animation look laggy).
-* **Enhanced user interface off during writes.** `AXEnhancedUserInterface` (set by
-  Grammarly, VoiceOver-ish tools, some password managers) makes Chrome/Firefox animate
-  their own AX resizes — slow and janky. Disable around frame writes, restore after.
+* **Events carry data.** AX callbacks read what is needed (`AXUIElementCopyMultipleAttributeValues`)
+  on the app's thread and post value snapshots. Main never blocks on AX.
+* **Incremental, coalesced.** Events mutate the model; layout is computed once per main
+  queue turn. Only windows whose target changed are written.
+* **Reconciliation is a safety net**, adding windows only: after observer registration,
+  app activation, app-level focused/main-window change naming an unknown window, global
+  left-mouse-up, space change, screen change, wake, unlock, and a 2 s timer while dirty.
+  Liveness = `kAXUIElementDestroyed` or a read returning `kAXErrorInvalidUIElement`
+  (never "absent from `kAXWindows`" — that omits other-Space and fullscreen windows).
+  Windows still valid but absent and off-screen are **ordered out** (keep tree slot
+  info, drop from layout, reinsert when they reappear).
+* **Per-app threads**, one `AXObserver` per app, `AXUIElementSetMessagingTimeout` 1 s on
+  app and window elements. Observer registration retries with backoff
+  (100/250/500/1000/2000 ms) until the app finished launching.
+* **Echo suppression.** Each window keeps a ring of its last 8 written frames. A moved/
+  resized notification whose read-back frame matches a ring entry (±1 pt, <500 ms) is ours
+  and dropped. Otherwise: left mouse down + window is focused → **user manipulation**;
+  else **app-driven** change → engine re-asserts the planned frame, at most 3 times per
+  2 s per window (fight guard), then leaves it alone until the next explicit layout change.
 
 ## Modules (SwiftPM targets)
 
-| Target          | Depends on                 | Contents |
-|-----------------|----------------------------|----------|
-| `SilkConfig`    | TOMLKit                    | Config model, TOML parsing (AeroSpace schema + Silk extensions), key-name → keycode tables, config file discovery. Commands kept as raw strings. Pure. |
-| `SilkCore`      | SilkConfig                 | Tree model (workspaces, containers, windows), normalization, layout engine, command parser + all commands, format strings for `list-*`, window rules. Pure logic; side effects only through the `PlatformActions` protocol. Fully unit-tested with a fake platform. |
-| `SilkPlatform`  | AppKit, ApplicationServices, Carbon | AX layer: per-app workers, observers, snapshots, classification heuristics, frame writes, focus/raise, monitors, global NSWorkspace/mouse/screen events, Carbon hotkeys, mouse warp. Knows nothing about trees. |
-| `SilkAnimation` | AppKit, QuartzCore         | Display-link driven animator (retargetable, curves, springs), `FrameSink` protocol, focus-border overlay window. Knows nothing about AX or trees. |
-| `SilkIPC`       | Foundation                 | Unix-socket wire protocol (length-prefixed JSON), client + server. |
-| `SilkApp`       | all of the above           | `Engine` glue, app lifecycle, menu bar, onboarding (AX permission), login item, crash-safe window restore, config-error UI. |
-| `silk`          | SilkIPC                    | CLI. `aerospace`-compatible: same subcommands, flags, output, exit codes. |
+| Target          | Depends on          | Contents |
+|-----------------|---------------------|----------|
+| `SilkConfig`    | TOMLDecoder         | Config model, TOML parsing (AeroSpace schema + Silk extensions), key mapping, config discovery. Commands kept as raw strings. Pure. |
+| `SilkCore`      | SilkConfig          | Tree model, normalization, layout engine, shell/command parser, every AeroSpace command, `list-*` formats, window rules, focus callbacks, mouse move/resize semantics, frozen-world persistence model. Pure; side effects via `PlatformActions`. Unit-tested with a fake platform. |
+| `SilkPlatform`  | SilkPrivateAPI      | AX workers, observers, snapshots, pure classifier (AeroSpace heuristics + axDumps corpus), frame writer with echo filter + latency stats, focus/raise, monitors, global events, Carbon hotkeys, mouse warp. Knows nothing about trees. |
+| `SilkAnimation` | AppKit, QuartzCore  | Animator thread, display links, tweens/curves/springs, per-app scheduling, focus border window, corner-radius calibration. Knows nothing about AX or trees. |
+| `SilkIPC`       | Foundation          | AeroSpace wire protocol, client + server, both socket paths, `subscribe` streaming. |
+| `SilkApp`       | all                 | `Engine` glue, lifecycle, menu bar, onboarding, login item, hide ledger + crash restore, config error UI, lock/sleep handling. |
+| `silk`          | SilkIPC             | CLI, argv-compatible with `aerospace`. |
 
-Language mode Swift 5 (strict concurrency off; we use threads + main-thread
-confinement deliberately). macOS 14+ deployment target.
+Swift 5 language mode, macOS 14+.
 
-## Coordinate system
+## Shared conventions
 
-Everything outside `SilkPlatform` uses **global top-left-origin points** (AX / CG
-convention: origin at top-left of the primary display, y grows downward). `SilkPlatform`
-converts NSScreen (bottom-left) frames before they leave the module.
+* **Coordinates**: global top-left-origin points (AX/CG convention) everywhere outside
+  `SilkPlatform`'s NSScreen conversion code.
+* **IDs**: `WindowID = UInt32` (CGWindowID), `pid_t` for apps, `MonitorID` = display UUID
+  string (stable across reconnects), plus `CGDirectDisplayID` for display links.
+* **Threads**: SilkCore and the Engine: main only. AX objects: confined to their app
+  thread. Animator: its own thread; talks to main and platform through thread-safe calls.
 
-## Threading contract
+## Module contracts
 
-* `SilkCore` objects: main thread only.
-* `SilkPlatform.AppWorker`: one thread per pid; all `AXUIElement` instances for an app
-  are created, used, and released on that thread. Public API is thread-safe and
-  asynchronous; callbacks to the engine are delivered on main via `DispatchQueue.main`.
-* `SilkAnimation.Animator`: main thread; display link callback on main.
-* IPC server accepts on a background thread, hops to main to run commands, replies
-  from main (commands are fast; no command blocks on AX).
+These are the seams between independently built modules. Signatures may be refined by
+the owning module, but semantics must hold; the Engine adapts.
 
-## Core model (SilkCore)
-
-Same semantics as AeroSpace so commands behave identically:
-
-```
-Workspace(name)
- ├─ rootTilingContainer : TilingContainer(layout: tiles|accordion, orientation: h|v)
- │    └─ children: [TilingContainer | Window], each with a weight
- ├─ floatingWindows: [Window]
- └─ (special) minimized / macOS-fullscreen / hidden-app windows containers
-```
-
-* Every non-leaf keeps **MRU order** of its children (drives focus restore).
-* Normalizations (config flags): flatten single-child containers; nested containers get
-  opposite orientation.
-* New tiling window binds next to the MRU window of the target workspace (AeroSpace rule).
-* Monitors: each has exactly one visible workspace. Workspace→monitor force-assignment
-  patterns: `main`, `secondary`, `built-in`, 1-based index, case-insensitive regex.
-* `persistent-workspaces` never GC'ed; other empty invisible workspaces are GC'ed.
-
-Public surface consumed by the glue (sketch — implementation may refine):
+### SilkPlatform → Engine
 
 ```swift
-public typealias WindowID = UInt32
-
-public struct MonitorDescriptor: Equatable { id: UInt32; name: String; frame: CGRect; visibleFrame: CGRect; isMain: Bool; isBuiltIn: Bool }
-public enum WindowKind { case tileable, dialog /* floats */, popup /* not managed */ }
-public struct DetectedWindow { id, pid, bundleId?, appName?, title, frame, kind, isMinimized, isFullscreen, isAppHidden }
-
-public protocol PlatformActions: AnyObject {
-    func focusWindow(_ id: WindowID)
-    func closeWindow(_ id: WindowID)
-    func setMinimized(_ id: WindowID, _ on: Bool)
-    func setNativeFullscreen(_ id: WindowID, _ on: Bool)
-    func execAndForget(_ script: String)
-    func moveMouse(to point: CGPoint)
-    var mouseLocation: CGPoint { get }
-    func title(of id: WindowID) -> String          // platform caches; refreshed on kAXTitleChanged
-    func runningApps() -> [AppDescriptor]           // list-apps
-    func setVolume(...)                             // volume command
+public struct WindowSnapshot: Sendable {          // read on the app thread
+    id: UInt32; pid: pid_t; bundleId: String?; appName: String?
+    title: String; frame: CGRect?; kind: WindowKind  // .window (tile) / .dialog (float) / .popup (ignore)
+    isMinimized: Bool; isFullscreen: Bool; isFocused: Bool; isMain: Bool
+    level: Int?                                       // nil = not on screen yet; re-classified later
 }
+public enum PlatformEvent: Sendable {
+    case windowAppeared(WindowSnapshot, discoveredByReconcile: Bool)
+    case windowReclassified(WindowSnapshot)
+    case windowDestroyed(UInt32)
+    case windowOrderedOut(UInt32), windowOrderedIn(UInt32)
+    case windowTitleChanged(UInt32, String)
+    case windowMinimizedChanged(UInt32, Bool)
+    case windowFullscreenChanged(UInt32, Bool)
+    case userManipulation(UInt32, frame: CGRect, phase: Phase)   // began / changed / ended (mouse up)
+    case appChangedFrame(UInt32, CGRect)                         // not our echo, not the user
+    case focusedWindowChanged(pid: pid_t, window: UInt32?)       // AX confirmation of focus
+    case appLaunched(pid_t), appTerminated(pid_t), appActivated(pid_t)
+    case appHidden(pid_t), appUnhidden(pid_t)
+    case monitorsChanged([MonitorInfo])                           // debounced ~750 ms
+    case activeSpaceChanged, willSleep, didWake, screenLocked, screenUnlocked
+    case leftMouseUp(CGPoint)
+}
+public final class PlatformService {
+    func start(onEvent: @escaping (PlatformEvent) -> Void)            // callbacks on main
+    func enumerateAll(completion: @escaping ([WindowSnapshot]) -> Void) // startup, parallel per app
+    var monitors: [MonitorInfo]
+    // actions (async, never block main)
+    func focus(window:, pid:)            // AeroSpace path: AXMain+AXRaise on app thread, then activate
+    func raise(window:)
+    func close(window:)
+    func setMinimized(window:, _:), setFullscreen(window:, _:)
+    func unhideApp(pid:)
+    func moveMouse(to:)
+    var mouseLocation: CGPoint; var isLeftMouseDown: Bool; var isSecureInputEnabled: Bool
+    let writer: FrameWriter               // thread-safe; used by the animator thread
+    func writeSynchronously(_ frames: [(UInt32, CGRect)], deadline:)  // termination restore
+}
+public final class FrameWriter {           // thread-safe
+    func submit(_ writes: [FrameWrite])     // latest-wins per window, drops stale epochs
+    func cancel(window:)
+    func cost(window:) -> WriteCost         // EMA ms for position and size writes, recent timeout flag
+}
+public struct FrameWrite { window: UInt32; frame: CGRect; epoch: UInt64; mode: .final | .intermediate(setSize: Bool, sizeFirst: Bool) }
+public struct MonitorInfo { id (UUID string); displayID; name; frame; visibleFrame; isMain; refreshRate }
+```
 
-public final class WindowManager {
-    init(config:, platform:, monitors:)
-    weak var delegate: WindowManagerDelegate?     // modeChanged, focusedWorkspaceChanged, configReloaded, enabledChanged
-    // platform → core
-    func windowDetected(_:, isStartup:)
-    func windowDestroyed(_:)
+### SilkCore ↔ Engine
+
+```swift
+public protocol PlatformActions: AnyObject {
+    func focus(window: WindowID, pid: pid_t)
+    func close(window: WindowID)
+    func setMinimized(window: WindowID, _: Bool)
+    func setNativeFullscreen(window: WindowID, _: Bool)
+    func unhideApp(pid: pid_t)
+    func execAndForget(_ script: String, env: [String: String])  // /bin/bash -c
+    func moveMouse(to: CGPoint)
+    var mouseLocation: CGPoint { get }
+    var isLeftMouseDown: Bool { get }
+    func runningApps() -> [AppInfo]
+    func setVolume(_:) / volume                    // `volume` command
+    func reloadConfig() -> ConfigLoadResult         // `reload-config`
+    func broadcast(_ event: ServerEvent)            // `subscribe` clients
+}
+public final class WindowManager {           // main thread only
+    init(config: Config, platform: PlatformActions, monitors: [Monitor])
+    // platform → core (mirror PlatformEvent; startup binds by monitor under window centre)
+    func windowDetected(_: DetectedWindow, isStartup: Bool)
+    func windowDestroyed / OrderedOut / OrderedIn / minimized / fullscreen / title
     func nativeFocusChanged(window:, pid:)
-    func windowFrameChangedByUser(_:, frame:)        // AX moved/resized not caused by us
-    func mouseUp(at:)                                // ends drag: swap / re-weight
-    func windowStateChanged(_:, minimized:/fullscreen:)
-    func appHiddenChanged(pid:, hidden:)
-    func appTerminated(pid:)
+    func userManipulation(window:, frame:, phase:)   // AeroSpace move/resize-with-mouse semantics
+    func appHidden/Unhidden/Terminated(pid:)
     func monitorsChanged(_:)
-    // commands (hotkeys, IPC, callbacks)
-    func run(args: [String], env: CommandEnv, stdin: String) -> CommandResult
-    func run(script: String /* e.g. "layout tiles horizontal vertical" */, env:) -> CommandResult
+    func applied(window:, presentedFrame:)          // read-back after final write
+    // commands (hotkeys, IPC, callbacks); shell syntax as in AeroSpace 0.21
+    func run(args: [String], stdin: String, env: CommandEnv) -> CommandResult
+    func run(script: String, env: CommandEnv) -> CommandResult
     // layout
     var needsLayout: Bool
     func computeLayout() -> LayoutPlan
+    func frozenWorld() -> FrozenWorld; func restore(_: FrozenWorld)   // crash/upgrade persistence
 }
-
 public struct LayoutPlan {
-    var frames: [WindowID: CGRect]           // every managed window on a visible workspace (tiling + floating)
-    var hidden: [WindowID: CGPoint]          // invisible-workspace windows: top-left in hide corner
-    var newlyPlaced: Set<WindowID>           // first placement since detection → "open" animation
-    var userDriven: Set<WindowID>            // currently being dragged/resized by user → never animate
-    var workspaceSwitches: [WorkspaceSwitch] // (monitor, from, to, direction) since last plan
+    var epoch: UInt64
+    var frames: [WindowID: CGRect]            // tiling + floating windows on visible workspaces
+    var hidden: [WindowID: HideTarget]        // invisible-workspace windows: monitor visibleRect + corner
+    var newlyPlaced: [WindowID: CGRect]       // first placement: app's initial frame (animation start)
+    var userDriven: Set<WindowID>             // never animate
+    var workspaceSwitches: [WorkspaceSwitch]  // monitor, from, to, slide direction (core picks free edge or .none)
     var focusedWindow: WindowID?
 }
 ```
 
-## Animation (SilkAnimation)
+### SilkAnimation ↔ Engine
 
-* `Animator` keeps, per window, `(from, to, start, duration, curve)`; each display-link
-  tick computes interpolated frames for active animations and hands them to the
-  `FrameSink` in one batch. **Retargeting**: a new target mid-flight starts from the
-  current *presented* frame (springs also carry velocity) — rapid `alt-h/l` spam stays
-  fluid instead of queueing.
-* Curves: cubic-bezier (Hyprland notation `bezier = 0.05, 0.9, 0.1, 1.05`), named
-  presets, critically-damped spring.
-* Kinds: `move` (tile changes), `open` (popin from ~85 % centered), `workspace`
-  (slide along an axis that does not cross into a neighbouring monitor; outgoing
-  windows park in the hide corner on completion).
-* Final frame is always written with `final: true` → worker writes size, position,
-  size (AeroSpace order, needed for apps that constrain) then reads back once.
-* Disabled per config, and automatically skipped for windows being dragged by the user,
-  for apps known to resize pathologically slowly (measured: if an app's average frame
-  write latency > ~40 ms, its windows snap instead of animating).
-* `BorderController`: one transparent click-through NSWindow per screen region, stroke
-  drawn with CAShapeLayer, ordered just above the focused window. It follows the
-  *animated* frame, so it is always 60/120 fps smooth even when the app is slower.
-
-## Config
-
-Read in order: `~/.silk.toml`, `~/.config/silk/silk.toml`, `~/.aerospace.toml`,
-`~/.config/aerospace/aerospace.toml`. AeroSpace keys are parsed with AeroSpace semantics.
-Silk-only sections (ignored by AeroSpace if the user shares the file):
-
-```toml
-[animations]
-enabled = true
-duration = 180                 # ms, window move/resize
-curve = 'hyprland'             # 'hyprland' | 'ease-out' | 'linear' | 'spring' | [x1, y1, x2, y2]
-window-open = 'popin'          # 'popin' | 'none'
-workspace-switch = 'slide'     # 'slide' | 'none'
-workspace-duration = 220
-
-[borders]
-enabled = true
-width = 2
-active-color = '#89b4fa'
-radius = 12
+```swift
+public protocol FrameSink: AnyObject {         // called on the animator thread
+    func submit(_ writes: [FrameWrite])
+    func cost(window: UInt32) -> WriteCost
+}
+public final class Animator {
+    init(sink: FrameSink, settings: AnimationSettings)
+    func update(settings:)
+    func apply(_ request: AnimationRequest)    // thread-safe; main posts, animator thread executes
+    func presentedFrame(window:) -> CGRect?    // current interpolated frame (for borders, retargeting)
+    var onFrame: ((UInt32, CGRect) -> Void)?   // border sync
+}
+public struct AnimationRequest {               // built by Engine from LayoutPlan + last known frames
+    var epoch: UInt64
+    var moves: [Move]                          // window, from (presented/known), to, kind: .layout / .open / .workspaceIn / .workspaceOut, screen displayID
+    var snaps: [(UInt32, CGRect)]              // apply instantly (final write)
+}
+public final class BorderController { func show(frame:, windowNumber:), hide(), update(config:) }
 ```
 
-Invalid config → keep running with previous config (or defaults on first load) and show
-the errors in a window + menu bar badge, like AeroSpace.
+Animation rules (owned by SilkAnimation):
 
-## Safety
+* Retarget mid-flight from the presented frame (springs keep velocity).
+* Per app per tick, budget = one frame interval of the window's screen. Position every
+  tick; size every n-th tick with n = ceil(k·sizeLatency / frameInterval); if n > 3 →
+  position-only (final size first when shrinking, last when growing). sizeLatency EMA
+  > 40 ms or a timeout in the last 5 s → snap.
+* Intermediate writes: shrinking → size then position; growing → position then size.
+  Final: `size, position, size`, then one read-back.
+* Overshooting curves apply overshoot to position only; size is clamped to [from, to].
+* Workspace switch = position-only slides (sizes applied while hidden first). Slide
+  axis never crosses into a neighbouring monitor; top edge impossible (menu bar clamp);
+  no free edge → instant. Outgoing windows park in AeroSpace's hide corner.
+* `AXEnhancedUserInterface` is cleared once per app at animation start and restored at end.
+* Reduce Motion (when `respect-reduce-motion`) → everything snaps.
 
-* On quit / SIGTERM / SIGINT / disable: every window hidden in a corner is moved back
-  onto its monitor (synchronous writes with a deadline).
-* Refuse to start while AeroSpace is running (offer to quit it).
-* Never manage our own windows, the lock screen, or windows of other spaces.
+## Safety & robustness (Engine)
+
+* Hide ledger (`~/Library/Application Support/Silk/state.json`) written atomically on every
+  hide/unhide; on launch, any ledger window still parked in a corner is restored.
+  Frozen world saved every few seconds and on quit; restored on relaunch.
+* SIGTERM/SIGINT/quit/disable: synchronous move-back of hidden windows with a deadline.
+* Lock screen: freeze model (ignore destroys), reconcile on unlock. Wake/screens: debounce,
+  monitors keyed by display UUID, assignments survive transient disconnects.
+* Refuse to start when AeroSpace is running (offer to quit it). Warn on Stage Manager.
+  Secure input indicator in the menu bar (Carbon hotkeys stop working).
+* TCC: stable signing identity; detect stale grant and `tccutil reset` like AeroSpace.

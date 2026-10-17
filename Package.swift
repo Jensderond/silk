@@ -44,5 +44,12 @@ let package = Package(
         ),
         .testTarget(name: "SilkCoreTests", dependencies: ["SilkCore"], swiftSettings: swiftSettings),
         .testTarget(name: "SilkAnimationTests", dependencies: ["SilkAnimation"], swiftSettings: swiftSettings),
+        .testTarget(
+            name: "SilkPlatformTests",
+            dependencies: ["SilkPlatform"],
+            resources: [.copy("Fixtures")],
+            swiftSettings: swiftSettings
+        ),
+        .testTarget(name: "SilkIPCTests", dependencies: ["SilkIPC"], swiftSettings: swiftSettings),
     ]
 )
