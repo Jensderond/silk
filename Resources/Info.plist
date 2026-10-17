@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Template for Silk.app/Contents/Info.plist. scripts/build-app.sh fills in CFBundleIdentifier, CFBundleName,
+  CFBundleDisplayName, CFBundleShortVersionString (VERSION), CFBundleVersion (git commit count) and
+  SilkGitCommit (full hash; with CFBundleShortVersionString it forms the IPC server version string).
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>Silk</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>dev.jensderond.silk</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Silk</string>
+	<key>CFBundleDisplayName</key>
+	<string>Silk</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>0</string>
+	<key>SilkGitCommit</key>
+	<string>SNAPSHOT</string>
+	<key>CFBundleSupportedPlatforms</key>
+	<array>
+		<string>MacOSX</string>
+	</array>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2026 Jens de Rond.</string>
+	<key>NSAccessibilityUsageDescription</key>
+	<string>Silk arranges your windows into tiles. It needs Accessibility access to read, move and resize the windows of other apps.</string>
+</dict>
+</plist>

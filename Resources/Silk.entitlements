@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Signed with the hardened runtime. Silk is not sandboxed: the Accessibility API, the socket files in /tmp and
+  exec-and-forget (/bin/bash -c) are unavailable to sandboxed apps. No other exceptions are needed.
+-->
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.app-sandbox</key>
+	<false/>
+</dict>
+</plist>
