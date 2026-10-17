@@ -6,8 +6,9 @@ final class Workspace: TreeNode {
     let name: String
     let sortKey: LogicalSegments
     unowned let world: World
-    /// The monitor the workspace was last shown on. Only interpreted while the workspace is invisible.
-    var assignedMonitorId: MonitorID?
+    /// The top-left corner of the monitor the workspace was last shown on. Only interpreted while the workspace is
+    /// invisible.
+    var assignedMonitorPoint: ScreenPoint?
 
     init(name: String, world: World) {
         self.name = name

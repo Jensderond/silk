@@ -237,8 +237,9 @@ public final class WindowManager {
         }
     }
 
-    /// The display configuration changed (`monitors` in `NSScreen.screens` order). Visible workspaces stay on
-    /// their monitors; workspaces of removed monitors move to the nearest one and come back when it reconnects.
+    /// The display configuration changed (`monitors` in `NSScreen.screens` order). As in AeroSpace, workspaces are
+    /// tied to screen positions (monitor top-left corners): visible workspaces move to the monitor closest to where
+    /// theirs was, and invisible ones belong to the monitor nearest to where they were last shown.
     public func monitorsChanged(_ monitors: [Monitor]) {
         eventSession { world.replaceMonitors(monitors) }
     }

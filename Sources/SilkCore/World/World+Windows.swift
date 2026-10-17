@@ -72,10 +72,26 @@ extension World {
     /// Forgets a closed window (AeroSpace `MacWindow.garbageCollect`). If it was on the focused workspace (or the
     /// one focused less than a second ago), focus moves to that workspace's most recent window — natively too when
     /// that window belongs to another app, because macOS would otherwise keep a windowless app focused.
-    func garbageCollect(_ window: Window) {
+    ///
+    /// `skipClosedWindowsCache` is true when Silk closed the window itself (`close`, `--quit-if-last-window`).
+    func garbageCollect(_ window: Window, skipClosedWindowsCache: Bool = false) {
         guard windowsById.removeValue(forKey: window.id) != nil else { return }
+        if !skipClosedWindowsCache { touchContainersLikeClosedWindowsCache() }
         guard let parent = window.unbindIfBound()?.parent else { return }
         refocusAfterRemoving(window, from: parent)
+    }
+
+    /// AeroSpace snapshots the whole world when a window dies on its own (`cacheClosedWindowIfNeeded`, its defence
+    /// against the lock screen). Silk doesn't keep that snapshot but reproduces its side effect on the tree: it creates every workspace's root, floating, hidden-apps and fullscreen containers if missing, and each
+    /// new container becomes its workspace's most recent child. Until a window of the workspace is marked most recent
+    /// again, focusing the workspace focuses its first window.
+    private func touchContainersLikeClosedWindowsCache() {
+        for workspace in allWorkspaces {
+            _ = workspace.rootTilingContainer
+            _ = workspace.floatingWindowsContainer
+            _ = workspace.macosHiddenAppsWindowsContainer
+            _ = workspace.macosFullscreenWindowsContainer
+        }
     }
 
     private func refocusAfterRemoving(_ window: Window, from parent: TreeNode) {

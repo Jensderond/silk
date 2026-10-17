@@ -204,7 +204,8 @@ private func makeFloatingWindowsSeenAsTiling(_ workspace: Workspace, _ world: Wo
     let mruBefore = workspace.mostRecentWindowRecursive
     defer { mruBefore?.markAsMostRecentChild() }
     var result: [FloatingWindowData] = []
-    for window in workspace.floatingWindows {
+    // Like AeroSpace's `workspace.floatingWindows`, this creates the floating container if it's missing
+    for case let window as Window in workspace.floatingWindowsContainer.children {
         guard let center = window.lastKnownFrame?.center else { continue }
         let tilingParent: TilingContainer
         let index: Int

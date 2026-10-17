@@ -27,13 +27,12 @@ final class World {
 
     /// Connected monitors in `NSScreen.screens` order.
     private(set) var monitors: [Monitor]
-    /// Frames of every monitor ever seen, so workspaces of a disconnected monitor land on the nearest one.
-    var lastKnownMonitorFrames: [MonitorID: CGRect] = [:]
 
     var workspacesByName: [String: Workspace] = [:]
-    var visibleWorkspaceByMonitor: [MonitorID: Workspace] = [:]
-    var monitorOfVisibleWorkspace: [String: MonitorID] = [:]
-    var prevVisibleWorkspaceByMonitor: [MonitorID: String] = [:]
+    /// Workspace↔monitor mapping, keyed by monitor top-left corners like AeroSpace (see `ScreenPoint`).
+    var screenPointToVisibleWorkspace: [ScreenPoint: Workspace] = [:]
+    var visibleWorkspaceToScreenPoint: [String: ScreenPoint] = [:]
+    var screenPointToPrevVisibleWorkspace: [ScreenPoint: String] = [:]
 
     var windowsById: [WindowID: Window] = [:]
     let minimizedContainer = MacosMinimizedWindowsContainer()
@@ -79,11 +78,10 @@ final class World {
         self.configURL = configURL
         self.monitors = monitors.isEmpty ? [World.fallbackMonitor] : monitors
         self.focusState = FrozenFocus(windowId: nil, workspaceName: "", monitorId: 0)
-        rememberMonitorFrames()
 
         // AeroSpace startup: persistent workspaces exist, every monitor shows a workspace, the first one is focused.
         for name in config.persistentWorkspaces { _ = workspace(named: name) }
-        rearrangeWorkspacesOnMonitors(previousMonitors: [])
+        rearrangeWorkspacesOnMonitors()
         let main = mainMonitor
         focusState = FrozenFocus(windowId: nil, workspaceName: activeWorkspace(on: main).name, monitorId: monitorId1Based(main) ?? 0)
         garbageCollectUnusedWorkspaces()
@@ -105,14 +103,8 @@ final class World {
     }
 
     func replaceMonitors(_ newMonitors: [Monitor]) {
-        let previous = monitors
         monitors = newMonitors.isEmpty ? [World.fallbackMonitor] : newMonitors
-        rememberMonitorFrames()
-        rearrangeWorkspacesOnMonitors(previousMonitors: previous)
-    }
-
-    private func rememberMonitorFrames() {
-        for monitor in monitors { lastKnownMonitorFrames[monitor.id] = monitor.frame }
+        gcMonitors()
     }
 
     /// The environment for `exec-*` commands: `[exec]` config applied to the process environment.

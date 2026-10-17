@@ -22,11 +22,11 @@ struct CloseCommand: ParsableCommand {
                 return context.io.fail("Failed to quit '\(window.appName ?? "Unknown app")'")
             }
             for appWindow in world.allWindows where appWindow.pid == window.pid {
-                world.garbageCollect(appWindow)
+                world.garbageCollect(appWindow, skipClosedWindowsCache: true)
             }
             return ExitCode.success
         }
-        world.garbageCollect(window)
+        world.garbageCollect(window, skipClosedWindowsCache: true)
         world.platform.close(window: window.id)
         return ExitCode.success
     }

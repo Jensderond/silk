@@ -1,5 +1,27 @@
 import CoreGraphics
 
+/// A monitor's top-left corner. AeroSpace identifies monitors by it rather than by display id: visible workspaces,
+/// the previously visible ones and invisible workspaces' last monitors are all keyed by screen position, so after a
+/// display rearrangement (e.g. docking makes the external display the main one at the origin) workspaces follow
+/// screen positions, not physical displays.
+struct ScreenPoint: Hashable, Comparable {
+    let x: CGFloat
+    let y: CGFloat
+
+    init(_ point: CGPoint) {
+        x = point.x
+        y = point.y
+    }
+
+    var cgPoint: CGPoint { CGPoint(x: x, y: y) }
+
+    static func < (lhs: ScreenPoint, rhs: ScreenPoint) -> Bool { (lhs.x, lhs.y) < (rhs.x, rhs.y) }
+}
+
+extension Monitor {
+    var screenPoint: ScreenPoint { ScreenPoint(frame.topLeftCorner) }
+}
+
 extension World {
     /// Gets or creates the workspace. Created workspaces live until garbage collected.
     func workspace(named name: String) -> Workspace {
@@ -11,7 +33,16 @@ extension World {
 
     var allWorkspaces: [Workspace] { workspacesByName.values.sorted() }
 
-    func isVisible(_ workspace: Workspace) -> Bool { monitorOfVisibleWorkspace[workspace.name] != nil }
+    func isVisible(_ workspace: Workspace) -> Bool { visibleWorkspaceToScreenPoint[workspace.name] != nil }
+
+    /// The workspace shown on each connected monitor.
+    var visibleWorkspaceByMonitor: [MonitorID: Workspace] {
+        var result: [MonitorID: Workspace] = [:]
+        for monitor in monitors {
+            if let workspace = screenPointToVisibleWorkspace[monitor.screenPoint] { result[monitor.id] = workspace }
+        }
+        return result
+    }
 
     /// Persistent workspaces always exist; others die once empty, invisible and unfocused.
     func garbageCollectUnusedWorkspaces() {
@@ -23,15 +54,12 @@ extension World {
         }
     }
 
-    /// The monitor a workspace is shown on: its force-assigned monitor, else where it's visible, else the monitor
-    /// it was last shown on, else the main monitor.
+    /// The monitor a workspace is shown on (AeroSpace `workspaceMonitor`): its force-assigned monitor, else the one
+    /// at the screen position where it's visible, else the one closest to where it was last shown, else the main one.
     func monitor(of workspace: Workspace) -> Monitor {
         if let forced = forceAssignedMonitor(of: workspace) { return forced }
-        if let id = monitorOfVisibleWorkspace[workspace.name], let monitor = monitor(id: id) { return monitor }
-        if let id = workspace.assignedMonitorId {
-            if let monitor = monitor(id: id) { return monitor }
-            if let frame = lastKnownMonitorFrames[id] { return monitorApproximation(frame.topLeftCorner) }
-        }
+        if let point = visibleWorkspaceToScreenPoint[workspace.name] { return monitorApproximation(point.cgPoint) }
+        if let point = workspace.assignedMonitorPoint { return monitorApproximation(point.cgPoint) }
         return mainMonitor
     }
 
@@ -43,41 +71,50 @@ extension World {
     }
 
     func activeWorkspace(on monitor: Monitor) -> Workspace {
-        if let existing = visibleWorkspaceByMonitor[monitor.id] { return existing }
-        rearrangeWorkspacesOnMonitors(previousMonitors: monitors)
-        return visibleWorkspaceByMonitor[monitor.id] ?? stubWorkspace(for: monitor)
+        if let existing = screenPointToVisibleWorkspace[monitor.screenPoint] { return existing }
+        // The monitor configuration changed (a top-left corner moved)
+        rearrangeWorkspacesOnMonitors()
+        return screenPointToVisibleWorkspace[monitor.screenPoint] ?? stubWorkspace(for: monitor)
     }
 
     /// Shows `workspace` on `monitor`. Fails if the workspace is force-assigned to another monitor.
     @discardableResult
     func setActiveWorkspace(_ workspace: Workspace, on monitor: Monitor) -> Bool {
-        if let forced = forceAssignedMonitor(of: workspace), forced.id != monitor.id { return false }
-        if let previousMonitorId = monitorOfVisibleWorkspace.removeValue(forKey: workspace.name) {
-            if let previous = visibleWorkspaceByMonitor.removeValue(forKey: previousMonitorId) {
-                prevVisibleWorkspaceByMonitor[previousMonitorId] = previous.name
-            }
+        setActiveWorkspace(workspace, at: monitor.screenPoint)
+    }
+
+    private func setActiveWorkspace(_ workspace: Workspace, at point: ScreenPoint) -> Bool {
+        if let forced = forceAssignedMonitor(of: workspace), forced.screenPoint != point { return false }
+        if let previousPoint = visibleWorkspaceToScreenPoint.removeValue(forKey: workspace.name) {
+            screenPointToPrevVisibleWorkspace[previousPoint] = screenPointToVisibleWorkspace.removeValue(forKey: previousPoint)?.name
         }
-        if let previous = visibleWorkspaceByMonitor.removeValue(forKey: monitor.id) {
-            prevVisibleWorkspaceByMonitor[monitor.id] = previous.name
-            monitorOfVisibleWorkspace.removeValue(forKey: previous.name)
+        if let previous = screenPointToVisibleWorkspace.removeValue(forKey: point) {
+            screenPointToPrevVisibleWorkspace[point] = previous.name
+            visibleWorkspaceToScreenPoint.removeValue(forKey: previous.name)
         }
-        visibleWorkspaceByMonitor[monitor.id] = workspace
-        monitorOfVisibleWorkspace[workspace.name] = monitor.id
-        workspace.assignedMonitorId = monitor.id
+        visibleWorkspaceToScreenPoint[workspace.name] = point
+        screenPointToVisibleWorkspace[point] = workspace
+        workspace.assignedMonitorPoint = point
         return true
     }
 
     /// An invisible workspace that belongs to `monitor`, to show when the monitor's workspace leaves it.
     func stubWorkspace(for monitor: Monitor) -> Workspace {
-        let persistent = Set(config.persistentWorkspaces)
-        if let previousName = prevVisibleWorkspaceByMonitor[monitor.id], let previous = workspacesByName[previousName],
-           !isVisible(previous), self.monitor(of: previous).id == monitor.id, forceAssignedMonitor(of: previous) == nil
-        {
-            return previous
+        stubWorkspace(at: monitor.screenPoint)
+    }
+
+    private func stubWorkspace(at point: ScreenPoint) -> Workspace {
+        // AeroSpace looks the previous workspace up by name, recreating it if it was garbage collected
+        if let previousName = screenPointToPrevVisibleWorkspace[point] {
+            let previous = workspace(named: previousName)
+            if !isVisible(previous) && monitor(of: previous).screenPoint == point && forceAssignedMonitor(of: previous) == nil {
+                return previous
+            }
         }
-        if let candidate = allWorkspaces.first(where: { !isVisible($0) && self.monitor(of: $0).id == monitor.id }) {
+        if let candidate = allWorkspaces.first(where: { !isVisible($0) && monitor(of: $0).screenPoint == point }) {
             return candidate
         }
+        let persistent = Set(config.persistentWorkspaces)
         var number = 1
         while true {
             let candidate = workspace(named: String(number))
@@ -90,39 +127,45 @@ extension World {
         }
     }
 
-    /// Re-establishes "every monitor shows exactly one workspace" after a monitor change. Visible workspaces stay on
-    /// their monitor (matched by id, else by the closest previous top-left corner); other monitors get a stub.
-    func rearrangeWorkspacesOnMonitors(previousMonitors: [Monitor]) {
-        let oldVisible = visibleWorkspaceByMonitor
-        let previousFrames = Dictionary(previousMonitors.map { ($0.id, $0.frame) }, uniquingKeysWith: { first, _ in first })
-        func previousTopLeft(_ id: MonitorID) -> CGPoint? { (previousFrames[id] ?? lastKnownMonitorFrames[id])?.topLeftCorner }
-
-        var newToOld: [MonitorID: MonitorID] = [:]
-        for monitor in monitors where oldVisible[monitor.id] != nil {
-            newToOld[monitor.id] = monitor.id
+    /// AeroSpace `gcMonitors`: re-establishes "every monitor shows exactly one workspace" when the number of monitors
+    /// changed or a monitor's top-left corner isn't known.
+    func gcMonitors() {
+        if screenPointToVisibleWorkspace.count != monitors.count
+            || monitors.contains(where: { screenPointToVisibleWorkspace[$0.screenPoint] == nil })
+        {
+            rearrangeWorkspacesOnMonitors()
         }
-        let presentIds = Set(monitors.map(\.id))
-        let unmatchedMonitors = monitors.filter { newToOld[$0.id] == nil }
-        for oldId in oldVisible.keys.sorted() where !presentIds.contains(oldId) {
-            guard let oldPoint = previousTopLeft(oldId) else { continue }
-            func distance(_ monitor: Monitor) -> CGFloat { (monitor.frame.topLeftCorner - oldPoint).vectorLength }
-            guard let closest = unmatchedMonitors.min(by: { distance($0) < distance($1) }) else { continue }
-            if let mappedOld = newToOld[closest.id], let mappedPoint = previousTopLeft(mappedOld),
-               (mappedPoint - closest.frame.topLeftCorner).vectorLength <= distance(closest)
+    }
+
+    /// AeroSpace `rearrangeWorkspacesOnMonitors`: every previously visible workspace goes to the new monitor whose
+    /// top-left corner is closest to its old one (ties and conflicts go to the closest old monitor); other monitors
+    /// get a stub workspace.
+    func rearrangeWorkspacesOnMonitors() {
+        let newScreens = monitors.map(\.screenPoint)
+        var newScreenToOldScreen: [ScreenPoint: ScreenPoint] = [:]
+        for oldScreen in screenPointToVisibleWorkspace.keys.sorted() {
+            func distance(_ newScreen: ScreenPoint) -> CGFloat { (newScreen.cgPoint - oldScreen.cgPoint).vectorLength }
+            guard let newScreen = newScreens.min(by: { distance($0) < distance($1) }) else { continue }
+            if let previousOldScreen = newScreenToOldScreen[newScreen],
+               (previousOldScreen.cgPoint - newScreen.cgPoint).vectorLength <= distance(newScreen)
             {
-                continue // Already taken by a closer previous monitor
+                continue // newScreen has already been assigned to a closer old screen
             }
-            newToOld[closest.id] = oldId
+            newScreenToOldScreen[newScreen] = oldScreen
         }
 
-        visibleWorkspaceByMonitor = [:]
-        monitorOfVisibleWorkspace = [:]
-        for monitor in monitors {
-            if let oldId = newToOld[monitor.id], let workspace = oldVisible[oldId], setActiveWorkspace(workspace, on: monitor) {
+        let oldScreenToVisibleWorkspace = screenPointToVisibleWorkspace
+        screenPointToVisibleWorkspace = [:]
+        visibleWorkspaceToScreenPoint = [:]
+
+        for newScreen in newScreens {
+            if let existing = newScreenToOldScreen[newScreen].flatMap({ oldScreenToVisibleWorkspace[$0] }),
+               setActiveWorkspace(existing, at: newScreen)
+            {
                 continue
             }
-            let stub = stubWorkspace(for: monitor)
-            setActiveWorkspace(stub, on: monitor)
+            let stub = stubWorkspace(at: newScreen)
+            _ = setActiveWorkspace(stub, at: newScreen)
         }
     }
 }

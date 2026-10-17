@@ -63,7 +63,9 @@ extension World {
         didRestoreSnapshot = true
         for frozenWorkspace in frozen.workspaces {
             let workspace = workspace(named: frozenWorkspace.name)
-            if !isVisible(workspace) { workspace.assignedMonitorId = frozenWorkspace.monitorId }
+            if !isVisible(workspace), let monitor = frozenWorkspace.monitorId.flatMap(monitor(id:)) {
+                workspace.assignedMonitorPoint = monitor.screenPoint
+            }
         }
         for (monitorId, name) in frozen.visibleWorkspaces.sorted(by: { $0.key < $1.key }) {
             if let monitor = monitor(id: monitorId) { setActiveWorkspace(workspace(named: name), on: monitor) }

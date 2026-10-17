@@ -31,11 +31,10 @@ struct TreeLayout {
                 workspace.lastAppliedLayoutPhysicalRect = physicalRect
                 workspace.lastAppliedLayoutVirtualRect = virtual
                 layoutRecursive(workspace.rootTilingContainer, point, width: width, height: height, virtual: virtual, context)
-                // Don't create a floating container here: a new empty container would become the workspace's most
-                // recent child and hide the most recent window from focus resolution.
-                if let floating = workspace.children.first(where: { $0 is FloatingWindowsContainer }) {
-                    layoutRecursive(floating, point, width: width, height: height, virtual: virtual, context)
-                }
+                // Like AeroSpace, this creates the floating container on the workspace's first layout. The new empty
+                // container becomes the workspace's most recent child, so until a window of the workspace is marked
+                // most recent again, focus falls back to its first window and new windows are appended to the root.
+                layoutRecursive(workspace.floatingWindowsContainer, point, width: width, height: height, virtual: virtual, context)
             case let container as FloatingWindowsContainer:
                 for case let window as Window in container.children {
                     window.lastAppliedLayoutPhysicalRect = nil

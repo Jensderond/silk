@@ -32,8 +32,15 @@ import Testing
         t.platform.reloadResult = Self.userConfig()
     }
 
-    private func detect(_ id: WindowID, at frame: CGRect, bundleId: String = "com.example.app", appName: String = "Example", isStartup: Bool = false) {
-        t.detect(id, pid: pid_t(id), bundleId: bundleId, appName: appName, title: "Window \(id)", frame: frame, isStartup: isStartup)
+    private func detect(
+        _ id: WindowID,
+        at frame: CGRect,
+        bundleId: String = "com.example.app",
+        appName: String = "Example",
+        isFocused: Bool = false,
+        isStartup: Bool = false
+    ) {
+        t.detect(id, pid: pid_t(id), bundleId: bundleId, appName: appName, title: "Window \(id)", frame: frame, isFocused: isFocused, isStartup: isStartup)
     }
 
     /// Runs `~/.slack-placement.sh` the way the CLI would: through `run(args:)`.
@@ -145,8 +152,10 @@ import Testing
 
     @Test func tilingBindingsWithGaps() {
         t.manager.finishStartup()
-        detect(1, at: CGRect(x: 100, y: 100, width: 800, height: 600))
-        detect(2, at: CGRect(x: 200, y: 200, width: 800, height: 600))
+        detect(1, at: CGRect(x: 100, y: 100, width: 800, height: 600), isFocused: true)
+        // macOS focuses the new window. Without it the focus would be the workspace's, which after the first layout
+        // (AeroSpace creates the floating container then) resolves to its first window.
+        detect(2, at: CGRect(x: 200, y: 200, width: 800, height: 600), isFocused: true)
         #expect(t.manager.focusedWindow == 2)
         var plan = t.manager.computeLayout()
         #expect(t.manager.focusedWindow == 2)
