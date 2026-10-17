@@ -188,7 +188,11 @@ extension AppWorker {
         }
         hasFailedReads = false
         var collected: [WindowSnapshot] = []
+        // Windows tracked by this pass: their snapshot is fresh, and a re-classification emitted
+        // now would reach the engine before a collected snapshot does.
+        var added = Set<UInt32>()
         func add(_ window: TrackedWindow) {
+            added.insert(window.id)
             if collect { collected.append(window.snapshot) } else { announce(window, discoveredByReconcile: discoveredByReconcile) }
         }
 
@@ -216,7 +220,16 @@ extension AppWorker {
         let absent = windows.values.filter { !present.contains($0.id) }
         if !absent.isEmpty {
             let serverInfo = WindowServerInfo.describe(absent.map(\.id))
-            for window in absent where serverInfo[window.id]?.isOnScreen != true {
+            for window in absent {
+                if serverInfo[window.id]?.isOnScreen == true {
+                    // Some windows (e.g. ones found as the focused window) are never listed in
+                    // `kAXWindows`; being back on screen is what brings them back.
+                    if window.isOrderedOut {
+                        window.isOrderedOut = false
+                        environment.emit(.windowOrderedIn(window.id))
+                    }
+                    continue
+                }
                 if window.element.copyValue(kAXRoleAttribute).error == .invalidUIElement {
                     windowGone(window.id)
                     continue
@@ -227,14 +240,17 @@ extension AppWorker {
                 }
             }
         }
-        for window in windows.values where present.contains(window.id) && (window.snapshot.kind == .popup || window.snapshot.level == nil) {
+        for window in windows.values where present.contains(window.id) && !added.contains(window.id)
+            && (window.snapshot.kind == .popup || window.snapshot.level == nil) {
             reclassify(window, throttled: false)
         }
         updateReconcileTimer()
         return collected
     }
 
-    /// Full snapshot re-read; emits `windowReclassified` when kind or level changed.
+    /// Full snapshot re-read; emits `windowReclassified` when kind or level changed, and the
+    /// title/minimized/fullscreen changes the new snapshot reveals (it replaces the tracked state
+    /// those events are diffed against, so they would otherwise never be reported).
     private func reclassify(_ window: TrackedWindow, throttled: Bool) {
         let now = MonotonicClock.now()
         if throttled && now - window.lastReclassification < Self.popupReclassificationThrottle { return }
@@ -243,11 +259,16 @@ extension AppWorker {
             window: window.element, id: window.id, appElement: appElement, app: identity, traits: traits, isMouseDown: false
         ) {
             case .snapshot(var snapshot, let dump):
-                snapshot.createdDuringMouseDrag = window.snapshot.createdDuringMouseDrag
-                let changed = snapshot.kind != window.snapshot.kind || snapshot.level != window.snapshot.level
+                let previous = window.snapshot
+                snapshot.createdDuringMouseDrag = previous.createdDuringMouseDrag
                 window.snapshot = snapshot
                 window.dump = dump
-                if changed { environment.emit(.windowReclassified(snapshot)) }
+                if snapshot.kind != previous.kind || snapshot.level != previous.level {
+                    environment.emit(.windowReclassified(snapshot))
+                }
+                if snapshot.title != previous.title { environment.emit(.windowTitleChanged(window.id, snapshot.title)) }
+                if snapshot.isMinimized != previous.isMinimized { environment.emit(.windowMinimizedChanged(window.id, snapshot.isMinimized)) }
+                if snapshot.isFullscreen != previous.isFullscreen { environment.emit(.windowFullscreenChanged(window.id, snapshot.isFullscreen)) }
             case .invalid:
                 windowGone(window.id)
             case .notAWindow, .failed:

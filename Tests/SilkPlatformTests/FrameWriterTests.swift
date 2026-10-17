@@ -7,11 +7,17 @@ import Testing
 private final class FakeTarget: FrameWriteTarget {
     let pid: pid_t
     var scheduledDrains: [() -> Void] = []
+    /// False once the "worker" was torn down.
+    var acceptsWork = true
     var performed: [[FrameWrite]] = []
 
     init(pid: pid_t) { self.pid = pid }
 
-    func scheduleDrain(_ drain: @escaping () -> Void) { scheduledDrains.append(drain) }
+    func scheduleDrain(_ drain: @escaping () -> Void) -> Bool {
+        guard acceptsWork else { return false }
+        scheduledDrains.append(drain)
+        return true
+    }
     func performFrameWrites(_ writes: [FrameWrite]) { performed.append(writes) }
     func performBlockingRestore(_ frames: [(UInt32, CGRect)], completion: @escaping (Set<UInt32>) -> Void) {
         completion(Set(frames.map(\.0)))
@@ -140,5 +146,32 @@ struct FrameWriterTests {
         #expect(written == [10, 20])
         appA.runDrains()
         #expect(appA.performed.isEmpty)
+    }
+
+    @Test func writesOfCurrentPlansCannotUndoARestore() {
+        writer.submit([write(10, x: 1, epoch: 3), write(20, x: 1, epoch: 5)])
+        appA.runDrains()
+        appB.runDrains()
+        writer.writeSynchronously([(10, .zero)], deadline: .now() + 1)
+        // E.g. the animator snapping a tween of plan 3 (or 5) after the restore was queued.
+        writer.submit([write(10, x: 2, epoch: 3), write(10, x: 3, epoch: 5)])
+        #expect(appA.scheduledDrains.isEmpty)
+        // The next plan moves the window again; other windows are unaffected.
+        writer.submit([write(10, x: 4, epoch: 6), write(20, x: 2, epoch: 5)])
+        appA.runDrains()
+        appB.runDrains()
+        #expect(appA.performed.map { $0.map(\.frame.minX) } == [[1], [4]])
+        #expect(appB.performed.map { $0.map(\.frame.minX) } == [[1], [2]])
+    }
+
+    @Test func aTornDownTargetDoesNotKeepItsBatch() {
+        appA.acceptsWork = false
+        writer.submit([write(10, x: 1, epoch: 1)])
+        // Had the refused batch been kept, no drain would ever be scheduled for the target again.
+        appA.acceptsWork = true
+        writer.submit([write(10, x: 2, epoch: 1)])
+        #expect(appA.scheduledDrains.count == 1)
+        appA.runDrains()
+        #expect(appA.performed == [[write(10, x: 2, epoch: 1)]])
     }
 }

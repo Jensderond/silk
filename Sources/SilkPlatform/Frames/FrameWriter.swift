@@ -7,8 +7,9 @@ import os
 /// production, a fake in tests).
 protocol FrameWriteTarget: AnyObject {
     var pid: pid_t { get }
-    /// Runs `drain` asynchronously on the target's thread.
-    func scheduleDrain(_ drain: @escaping () -> Void)
+    /// Runs `drain` asynchronously on the target's thread. Returns false when the target was torn
+    /// down and will never run it.
+    func scheduleDrain(_ drain: @escaping () -> Void) -> Bool
     /// Performs writes; called on the target's thread from within a drain.
     func performFrameWrites(_ writes: [FrameWrite])
     /// Writes `frames` as final frames on the target's thread, then calls `completion` with
@@ -36,7 +37,16 @@ public final class FrameWriter: @unchecked Sendable {
     private struct State {
         var pending: [ObjectIdentifier: PendingBatch] = [:]
         var latestEpoch: [UInt32: UInt64] = [:]
+        /// Newest epoch accepted for any window (plan epochs are global and monotonic).
+        var newestEpoch: UInt64 = 0
         var stats: [pid_t: WriteLatencyStats] = [:]
+
+        mutating func dropPending(window: UInt32, target: FrameWriteTarget) {
+            let key = ObjectIdentifier(target)
+            guard var batch = pending[key], batch.writes.removeValue(forKey: window) != nil else { return }
+            batch.order.removeAll { $0 == window }
+            pending[key] = batch
+        }
     }
 
     private let lock = OSAllocatedUnfairLock(uncheckedState: State())
@@ -55,6 +65,7 @@ public final class FrameWriter: @unchecked Sendable {
                 guard let target else { continue }
                 if let latest = state.latestEpoch[write.window], write.epoch < latest { continue }
                 state.latestEpoch[write.window] = write.epoch
+                state.newestEpoch = max(state.newestEpoch, write.epoch)
                 let key = ObjectIdentifier(target)
                 // A batch exists exactly while a drain is scheduled for its target.
                 if state.pending[key] == nil { targetsToSchedule.append(target) }
@@ -64,22 +75,20 @@ public final class FrameWriter: @unchecked Sendable {
             }
         }
         for target in targetsToSchedule {
-            target.scheduleDrain { [weak self, weak target] in
+            let scheduled = target.scheduleDrain { [weak self, weak target] in
                 guard let self, let target else { return }
                 self.drain(target)
             }
+            // A torn-down target never drains: drop its batch, or it would pin the target forever
+            // and swallow every later submission for it.
+            if !scheduled { lock.withLockUnchecked { _ = $0.pending.removeValue(forKey: ObjectIdentifier(target)) } }
         }
     }
 
     /// Drops the pending write for `window`, if any.
     public func cancel(window: UInt32) {
         guard let target = resolveTarget(window) else { return }
-        lock.withLockUnchecked { state in
-            let key = ObjectIdentifier(target)
-            guard var batch = state.pending[key], batch.writes.removeValue(forKey: window) != nil else { return }
-            batch.order.removeAll { $0 == window }
-            state.pending[key] = batch
-        }
+        lock.withLockUnchecked { $0.dropPending(window: window, target: target) }
     }
 
     /// Measured write cost for the window's app.
@@ -92,13 +101,25 @@ public final class FrameWriter: @unchecked Sendable {
     /// Writes final frames synchronously (termination restore): cancels pending writes for those
     /// windows, writes on each app's thread in parallel and waits until all are done or `deadline`
     /// passes. Returns the windows that were written. Must not be called from an app worker thread.
+    ///
+    /// Afterwards the windows only accept writes of epochs newer than any submitted so far: writes
+    /// of current plans arriving late (an animator snapping its tweens while the restore runs, a
+    /// deferred park) would otherwise undo the restore.
     @discardableResult
     public func writeSynchronously(_ frames: [(UInt32, CGRect)], deadline: DispatchTime) -> Set<UInt32> {
         var byTarget: [ObjectIdentifier: (FrameWriteTarget, [(UInt32, CGRect)])] = [:]
         for (window, frame) in frames {
             guard let target = resolveTarget(window) else { continue }
-            cancel(window: window)
             byTarget[ObjectIdentifier(target), default: (target, [])].1.append((window, frame))
+        }
+        lock.withLockUnchecked { state in
+            let fence = state.newestEpoch &+ 1
+            for (target, targetFrames) in byTarget.values {
+                for (window, _) in targetFrames {
+                    state.dropPending(window: window, target: target)
+                    state.latestEpoch[window] = fence
+                }
+            }
         }
         let written = OSAllocatedUnfairLock(initialState: Set<UInt32>())
         let group = DispatchGroup()
@@ -143,10 +164,7 @@ public final class FrameWriter: @unchecked Sendable {
     func forget(window: UInt32, target: FrameWriteTarget) {
         lock.withLockUnchecked { state in
             state.latestEpoch.removeValue(forKey: window)
-            let key = ObjectIdentifier(target)
-            guard var batch = state.pending[key], batch.writes.removeValue(forKey: window) != nil else { return }
-            batch.order.removeAll { $0 == window }
-            state.pending[key] = batch
+            state.dropPending(window: window, target: target)
         }
     }
 

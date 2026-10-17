@@ -5,7 +5,7 @@ extension AppWorker {
     /// `AXEnhancedUserInterface` is restored after this long without writes.
     static let enhancedUserInterfaceRestoreDelay: TimeInterval = 0.3
 
-    func scheduleDrain(_ drain: @escaping () -> Void) {
+    func scheduleDrain(_ drain: @escaping () -> Void) -> Bool {
         perform(drain)
     }
 
@@ -19,7 +19,8 @@ extension AppWorker {
     }
 
     func performBlockingRestore(_ frames: [(UInt32, CGRect)], completion: @escaping (Set<UInt32>) -> Void) {
-        perform { [self] in
+        // A stopped worker (its app just quit) never runs the block; don't keep the caller waiting.
+        let accepted = perform { [self] in
             beginWriteBurst()
             var written = Set<UInt32>()
             for (id, frame) in frames {
@@ -31,6 +32,7 @@ extension AppWorker {
             if isEnhancedUserInterfaceCleared { restoreEnhancedUserInterface() }
             completion(written)
         }
+        if !accepted { completion([]) }
     }
 
     /// Returns false when the window turned out to be gone.

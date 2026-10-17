@@ -72,29 +72,42 @@ final class AppWorker: FrameWriteTarget {
         thread.start()
     }
 
-    /// Runs `block` on the worker thread. Blocks submitted after ``stop()`` are dropped.
-    func perform(_ block: @escaping () -> Void) {
+    /// Runs `block` on the worker thread. Blocks submitted after ``stop()`` are dropped; returns
+    /// false for those (the block will never run).
+    @discardableResult
+    func perform(_ block: @escaping () -> Void) -> Bool {
         runLoopState.withLockUnchecked { state in
-            guard !state.isStopped else { return }
-            if let runLoop = state.runLoop {
-                CFRunLoopPerformBlock(runLoop, CFRunLoopMode.defaultMode.rawValue, block)
-                CFRunLoopWakeUp(runLoop)
-            } else {
-                state.queued.append(block)
-            }
+            guard !state.isStopped else { return false }
+            Self.enqueue(block, &state)
+            return true
         }
     }
 
     /// Tears the worker down: removes every notification, releases AX objects in reverse order
     /// of creation and stops the run loop. With `emitDestroyed`, tracked windows are reported as
     /// destroyed first. `completion` runs on the worker thread after teardown.
+    ///
+    /// Stopping and enqueueing the teardown happen under one lock, so the teardown is the last
+    /// block that ever runs: nothing submitted concurrently can run against the released elements.
     func stop(emitDestroyed: Bool, completion: (() -> Void)? = nil) {
-        perform { [self] in
-            tearDown(emitDestroyed: emitDestroyed)
-            completion?()
-            CFRunLoopStop(CFRunLoopGetCurrent())
+        runLoopState.withLockUnchecked { state in
+            guard !state.isStopped else { return }
+            state.isStopped = true
+            Self.enqueue({ [self] in
+                tearDown(emitDestroyed: emitDestroyed)
+                completion?()
+                CFRunLoopStop(CFRunLoopGetCurrent())
+            }, &state)
         }
-        runLoopState.withLockUnchecked { $0.isStopped = true }
+    }
+
+    private static func enqueue(_ block: @escaping () -> Void, _ state: inout RunLoopState) {
+        if let runLoop = state.runLoop {
+            CFRunLoopPerformBlock(runLoop, CFRunLoopMode.defaultMode.rawValue, block)
+            CFRunLoopWakeUp(runLoop)
+        } else {
+            state.queued.append(block)
+        }
     }
 
     // MARK: - Thread lifecycle
@@ -174,10 +187,12 @@ final class AppWorker: FrameWriteTarget {
         guard let observer else { return }
         cancel(&registrationRetryTimer)
         var lastError = AXError.success
+        var addedRequired = false
         for name in Self.requiredAppNotifications + Self.optionalAppNotifications where !registeredAppNotifications.contains(name) {
             let error = AXObserverAddNotification(observer, appElement, name as CFString, nil)
             if error == .success || error == .notificationAlreadyRegistered {
                 registeredAppNotifications.append(name)
+                if Self.requiredAppNotifications.contains(name) { addedRequired = true }
             } else if Self.requiredAppNotifications.contains(name) {
                 lastError = error
             }
@@ -193,7 +208,12 @@ final class AppWorker: FrameWriteTarget {
             backoff.reset()
         }
         let acceptsAny = Self.requiredAppNotifications.contains { registeredAppNotifications.contains($0) }
-        guard !isRegistered else { return }
+        guard !isRegistered else {
+            // Windows created while `kAXWindowCreated` was missing (or focused while
+            // `kAXFocusedWindowChanged` was) went unseen; pick them up now.
+            if addedRequired { reconcile() }
+            return
+        }
         guard acceptsAny else {
             finishInitialEnumeration([])
             return

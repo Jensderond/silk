@@ -151,10 +151,11 @@ public final class PlatformService {
             completion?(false)
             return
         }
-        worker.perform {
+        let accepted = worker.perform {
             let pressed = worker.close(window)
             if let completion { DispatchQueue.main.async { completion(pressed) } }
         }
+        if !accepted { completion?(false) }
     }
 
     public func setMinimized(window: UInt32, _ minimized: Bool) {
@@ -173,10 +174,21 @@ public final class PlatformService {
         InputState.moveMouse(to: point)
     }
 
-    /// Termination restore; see ``FrameWriter/writeSynchronously(_:deadline:)``.
+    /// Termination restore; see ``FrameWriter/writeSynchronously(_:deadline:)``. Windows no worker
+    /// tracks (yet) — at startup, before enumeration, that is all of them — are written directly.
     @discardableResult
     public func writeSynchronously(_ frames: [(UInt32, CGRect)], deadline: DispatchTime) -> Set<UInt32> {
-        writer.writeSynchronously(frames, deadline: deadline)
+        let untracked = frames.filter { directory.worker(for: $0.0) == nil }
+        guard !untracked.isEmpty else { return writer.writeSynchronously(frames, deadline: deadline) }
+        let written = OSAllocatedUnfairLock(initialState: Set<UInt32>())
+        let group = DispatchGroup()
+        DispatchQueue.global(qos: .userInitiated).async(group: group) {
+            let done = UntrackedFrameRestore.write(untracked)
+            written.withLock { $0.formUnion(done) }
+        }
+        let tracked = writer.writeSynchronously(frames, deadline: deadline)
+        _ = group.wait(timeout: deadline)
+        return written.withLock { $0 }.union(tracked)
     }
 
     private func onWorker(of window: UInt32, _ body: @escaping (AppWorker) -> Void) {

@@ -7,6 +7,7 @@ enum WindowServerInfo {
     struct Entry: Equatable {
         var layer: Int
         var isOnScreen: Bool
+        var ownerPID: pid_t?
     }
 
     /// Entries for the windows the window server still knows; absent ids are gone.
@@ -22,7 +23,8 @@ enum WindowServerInfo {
             guard let number = description[kCGWindowNumber] as? NSNumber else { continue }
             result[number.uint32Value] = Entry(
                 layer: (description[kCGWindowLayer] as? NSNumber)?.intValue ?? 0,
-                isOnScreen: (description[kCGWindowIsOnscreen] as? NSNumber)?.boolValue ?? false
+                isOnScreen: (description[kCGWindowIsOnscreen] as? NSNumber)?.boolValue ?? false,
+                ownerPID: (description[kCGWindowOwnerPID] as? NSNumber)?.int32Value
             )
         }
         return result
