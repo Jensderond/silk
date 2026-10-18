@@ -1,3 +1,5 @@
+<img src="Resources/AppIcon.png" alt="Silk app icon" width="128">
+
 # Silk
 
 A tiling window manager for macOS with **AeroSpace's functionality**, made **faster** and
@@ -25,15 +27,22 @@ app slows everyone down.
 Silk is incremental instead. Each app gets its own thread and observer; a notification carries a
 snapshot of the window it is about, the core updates its tree, and the layout is computed once per
 main-loop turn and diffed, so only windows that actually move are written. Measured on this
-machine (M4 Pro, macOS 26.6, 8 apps running, 5 trials each; window-server sampling every 2 ms):
+machine (M4 Pro, macOS 26.6, 60 Hz display, 8 apps running, 5 trials each; window-server sampling
+every 1–2 ms; times from the window's first appearance on screen):
 
 | | AeroSpace 0.21.3 | Silk |
 |---|---|---|
-| New window of a running app — starts moving | 23–42 ms | **12–31 ms** |
-| New window of a running app — in place¹ | jumps at 62–77 ms | **90 % there at 52–66 ms**, gliding |
-| New app process (`open -n`, like `alt-enter`) — in its tile | 114–132 ms | **88–115 ms** |
+| New window of a running app — starts moving | 23–42 ms | **2–18 ms** |
+| New window of a running app — in place¹ | jumps at 62–77 ms | **90 % there at 93–120 ms**, gliding |
+| New app process (`open -n`, like `alt-enter`) — in its tile | 114–132 ms | **82–94 ms** |
 
-¹ Silk animates the window from where the app opened it into its tile.
+¹ Silk animates the window from where the app opened it into its tile. The default curve spreads
+the glide over about ten frames instead of covering half the distance in the first one, so it
+reaches 90 % later than AeroSpace's jump; `curve = [0.16, 1, 0.3, 1]` (the previous default) gets
+there sooner, with bigger steps.
+
+Silk column re-measured on macOS 26.6.2 with Ghostty (`new window` via AppleScript; `open -n` for
+the new process); the AeroSpace column is from the original run.
 
 ## Why it is smooth
 

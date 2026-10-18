@@ -24,9 +24,10 @@ app:
 debug-app:
 	scripts/build-app.sh --debug
 
-## Regenerates Resources/AppIcon.icns (committed; builds don't need this).
+## Regenerates Resources/AppIcon.icns and the README's Resources/AppIcon.png (committed; builds don't need this).
 icon:
 	swift scripts/make-icon.swift Resources/AppIcon.icns
+	sips -s format png -Z 512 Resources/AppIcon.icns --out Resources/AppIcon.png
 
 install: app
 	@$(QUIT_SILK)
