@@ -11,7 +11,9 @@ public enum MotionCurve: Equatable, Sendable {
 
     /// Hyprland's default `bezier = myBezier, 0.05, 0.9, 0.1, 1.05` (overshoots ~5 %).
     public static let hyprland = MotionCurve.bezier(UnitBezier(x1: 0.05, y1: 0.9, x2: 0.1, y2: 1.05))
-    public static let easeOut = MotionCurve.bezier(UnitBezier(x1: 0.16, y1: 1, x2: 0.3, y2: 1))
+    /// Quartic ease-out (`curve = 'ease-out'`, the default): 33 % of the distance in the first
+    /// frame of a 180 ms move at 60 Hz, 90 % after five frames.
+    public static let easeOut = MotionCurve.bezier(UnitBezier(x1: 0.25, y1: 1, x2: 0.5, y2: 1))
     /// Critically damped, settles in roughly `response` seconds for typical distances.
     public static let defaultSpring = MotionCurve.spring(Spring(response: 0.3, dampingRatio: 1))
 }

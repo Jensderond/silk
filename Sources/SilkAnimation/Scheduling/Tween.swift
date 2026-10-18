@@ -16,14 +16,21 @@ struct Tween {
     let to: SIMD4<Double>
     /// What the final write sets: `to`, or the move's follow-up frame.
     let restingFrame: CGRect
-    let start: Double
-    let end: Double
+    /// Start and end of the timeline. Shifted (together) once, by the first display-link tick
+    /// after the lead-in step, to bring the tween in phase with vsync.
+    var start: Double
+    var end: Double
     let curve: MotionCurve
     /// Initial velocity in points per second; only springs use it.
     let initialVelocity: SIMD4<Double>
     /// The frame the window was last written to (or its frame before the first write).
     var written: CGRect
     var ticks = 0
+    /// When the tween was last sampled (the `now` of its last step); nil before the first step.
+    var lastSampleTime: Double?
+    /// Set by the lead-in step: the next tick re-phases the timeline so it advances exactly one
+    /// frame interval past the lead-in frame.
+    var needsAlignment = false
 
     /// Interpolated (unclamped, unrounded) frame and its velocity in points per second.
     func sample(at now: Double) -> (value: SIMD4<Double>, velocity: SIMD4<Double>) {

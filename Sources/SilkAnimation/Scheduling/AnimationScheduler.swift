@@ -38,6 +38,8 @@ public struct SchedulerOutput: Equatable, Sendable {
 /// * Overshoot moves the position only; sizes are clamped between start and target.
 /// * Moves smaller than `minimumDelta` snap; once a tween's time is up the final write is
 ///   always emitted, whatever the budget did.
+/// * New tweens are written at once by `leadIn` (their frame for the coming vsync) and re-phased
+///   by their first tick, so they start in phase with vsync; `apply` never steps running tweens.
 public struct AnimationScheduler {
     public var settings: AnimationSettings
     /// The system "Reduce motion" setting; snaps everything when `settings.respectReduceMotion`.
@@ -95,27 +97,23 @@ public struct AnimationScheduler {
         display displayID: CGDirectDisplayID, now: Double, frameInterval: Double,
         cost: (UInt32) -> WriteCost
     ) -> SchedulerOutput {
-        let appsBefore = animatingApps
-        var output = SchedulerOutput()
-        var groups: [pid_t: [(window: UInt32, cost: WriteCost)]] = [:]
-        for window in tweens.keys.sorted() {
-            guard let tween = tweens[window], tween.displayID == displayID else { continue }
-            let writeCost = cost(window)
-            if now >= tween.end || exceedsBudget(writeCost, resizes: tween.animatesSize) {
-                finish(window, into: &output)
-            } else {
-                groups[tween.pid, default: []].append((window, writeCost))
-            }
-        }
-        for pid in groups.keys.sorted() {
-            let members = groups[pid]!
-            let cadence = sizeCadence(for: members, frameInterval: frameInterval)
-            for member in members {
-                step(member.window, now: now, sizeCadence: cadence, into: &output)
-            }
-        }
-        recordAppChanges(since: appsBefore, into: &output)
-        return output
+        advance(display: displayID, now: now, frameInterval: frameInterval, cost: cost, leadIn: false)
+    }
+
+    /// Writes the first frame of the tweens on `displayID` that were never stepped (started or
+    /// retargeted by the last `apply`), sampled at `now`: the presentation time of the coming
+    /// vsync. Running tweens are left alone; their frame for that vsync is already out, and a
+    /// sample at another time would knock them off the vsync grid or even step them backwards.
+    ///
+    /// The first `tick` after a lead-in re-phases these tweens so they advance exactly
+    /// `frameInterval` past the lead-in frame, whatever that tick's `now`: a tween then shows
+    /// curve times 1, 2, 3… frames on consecutive vsyncs however its request was timed, instead
+    /// of skipping up to a frame of motion at the start, where ease-out curves move fastest.
+    public mutating func leadIn(
+        display displayID: CGDirectDisplayID, now: Double, frameInterval: Double,
+        cost: (UInt32) -> WriteCost
+    ) -> SchedulerOutput {
+        advance(display: displayID, now: now, frameInterval: frameInterval, cost: cost, leadIn: true)
     }
 
     /// Completes tweens that are more than `grace` seconds past their deadline. Safety net
@@ -165,6 +163,53 @@ public struct AnimationScheduler {
         let after = animatingApps
         output.appsBegan = after.subtracting(before).sorted()
         output.appsEnded = before.subtracting(after).sorted()
+    }
+
+    private mutating func advance(
+        display displayID: CGDirectDisplayID, now: Double, frameInterval: Double,
+        cost: (UInt32) -> WriteCost, leadIn: Bool
+    ) -> SchedulerOutput {
+        let appsBefore = animatingApps
+        var output = SchedulerOutput()
+        var groups: [pid_t: [(window: UInt32, cost: WriteCost)]] = [:]
+        for window in tweens.keys.sorted() {
+            guard let tween = tweens[window], tween.displayID == displayID else { continue }
+            if leadIn {
+                guard tween.ticks == 0 else { continue }
+            } else if tween.needsAlignment {
+                align(window, now: now, frameInterval: frameInterval)
+            }
+            let writeCost = cost(window)
+            if now >= tweens[window]!.end || exceedsBudget(writeCost, resizes: tween.animatesSize) {
+                finish(window, into: &output)
+            } else {
+                groups[tween.pid, default: []].append((window, writeCost))
+            }
+        }
+        for pid in groups.keys.sorted() {
+            let members = groups[pid]!
+            let cadence = sizeCadence(for: members, frameInterval: frameInterval)
+            for member in members {
+                step(member.window, now: now, sizeCadence: cadence, into: &output)
+                if leadIn { tweens[member.window]?.needsAlignment = true }
+            }
+        }
+        recordAppChanges(since: appsBefore, into: &output)
+        return output
+    }
+
+    /// Shifts a lead-in tween's timeline so that `now` lies one frame interval after its lead-in
+    /// sample. Normally the shift is within one frame (the request's offset from vsync); it is
+    /// bounded so a stalled display link cannot postpone a tween by more than a couple of frames.
+    private mutating func align(_ window: UInt32, now: Double, frameInterval: Double) {
+        guard var tween = tweens[window] else { return }
+        tween.needsAlignment = false
+        if let last = tween.lastSampleTime {
+            let shift = min(max(now - (last + frameInterval), -frameInterval), 2 * frameInterval)
+            tween.start += shift
+            tween.end += shift
+        }
+        tweens[window] = tween
     }
 
     private mutating func finish(_ window: UInt32, into output: inout SchedulerOutput) {
@@ -269,6 +314,7 @@ public struct AnimationScheduler {
             width: size.x.rounded(), height: size.y.rounded()
         )
         tween.ticks += 1
+        tween.lastSampleTime = now
         let setSize = frame.size.maxDelta(to: tween.written.size) >= 0.5
         let moved = abs(frame.minX - tween.written.minX) >= 0.5 || abs(frame.minY - tween.written.minY) >= 0.5
         if setSize || moved {

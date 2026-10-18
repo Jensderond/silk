@@ -362,3 +362,80 @@ import Testing
         #expect(output.appsEnded == [100, 200])
     }
 }
+
+/// The animator writes new tweens at once (lead-in) and then ticks on vsync.
+@Suite struct SchedulerLeadInTests {
+    // Linear, 0.2 s over 600 pt: x = 3000 · curve time.
+    private let from = CGRect(x: 0, y: 0, width: 300, height: 300)
+    private var to: CGRect { from.offsetBy(dx: 600, dy: 0) }
+
+    @Test func leadInWritesTheFrameOneIntervalIntoTheCurve() throws {
+        var run = Run(settings())
+        _ = run.apply([move(from: from, to: to)])
+        let write = try #require(run.leadIn().writes.first)
+        #expect(write.frame.minX == 50)
+        #expect(!write.isFinal)
+    }
+
+    /// Wherever the request falls between two vsyncs, the first tick shows exactly one frame
+    /// more than the lead-in, and later ticks follow the display.
+    @Test(arguments: [0.0005, 0.004, 0.009, 0.0165])
+    func firstTickContinuesOneFrameAfterTheLeadIn(phase: Double) throws {
+        var run = Run(settings())
+        _ = run.apply([move(from: from, to: to)])
+        _ = run.leadIn()
+        // The link's first tick: fires at the next vsync, `phase` after the request, and
+        // targets the vsync after that.
+        let firstTick = run.tick(elapsed: phase + frameInterval60)
+        #expect(try #require(firstTick.writes.first).frame.minX == 100)
+        let secondTick = run.tick()
+        #expect(try #require(secondTick.writes.first).frame.minX == 150)
+    }
+
+    @Test func alignmentShiftsTheDeadlineWithTheTimeline() {
+        var run = Run(settings())
+        _ = run.apply([move(from: from, to: to)])
+        _ = run.leadIn()
+        _ = run.tick(elapsed: 0.009 + frameInterval60)
+        // Curve time at the first tick is 2/60 although 0.009 + 1/60 passed: shifted by 0.009 − 1/60.
+        #expect(abs(run.scheduler.nextDeadline! - (0.2 + 0.009 - frameInterval60)) < 1e-9)
+        let outputs = run.runToEnd()
+        #expect(outputs.last?.writes == [FrameWrite(window: 1, frame: to, epoch: 1, mode: .final)])
+    }
+
+    @Test func aStalledFirstTickHoldsAtMostTwoFrames() throws {
+        var run = Run(settings())
+        _ = run.apply([move(from: from, to: to)])
+        _ = run.leadIn()
+        // 100 ms hitch before the first tick: continue from the lead-in, delayed by at most
+        // two frames, rather than jumping or postponing the whole move.
+        let write = try #require(run.tick(elapsed: 0.1).writes.first)
+        // Curve time 0.1 − 2/60 s → x = 200.
+        #expect(write.frame.minX == 200)
+    }
+
+    @Test func leadInLeavesRunningTweensAlone() throws {
+        var run = Run(settings())
+        _ = run.apply([move(1, from: from, to: to)])
+        _ = run.tick()
+        _ = run.tick()
+        let presented = try #require(run.scheduler.presentedFrame(window: 1))
+        run.now += 0.006  // a request between two vsyncs
+        _ = run.apply([move(2, from: from.offsetBy(dx: 0, dy: 400), to: to.offsetBy(dx: 0, dy: 400))], epoch: 2)
+        let output = run.leadIn()
+        #expect(output.writes.map(\.window) == [2])
+        #expect(run.scheduler.presentedFrame(window: 1) == presented)
+        #expect(run.scheduler.tweens[1]?.needsAlignment == false)
+    }
+
+    @Test func retargetedTweenGetsALeadIn() throws {
+        var run = Run(settings())
+        _ = run.apply([move(from: from, to: to)])
+        for _ in 0..<3 { _ = run.tick() }
+        let presented = try #require(run.scheduler.presentedFrame(window: 1))
+        _ = run.apply([move(from: from, to: from)], epoch: 2)
+        let write = try #require(run.leadIn().writes.first)
+        #expect(write.epoch == 2)
+        #expect(write.frame.minX < presented.minX)
+    }
+}

@@ -81,11 +81,11 @@ public final class Animator {
     /// continue on the primary screen.
     @MainActor
     public func screensDidChange() {
-        let screens = NSScreen.screens.compactMap { screen -> (CGDirectDisplayID, NSScreen)? in
+        let screens = NSScreen.screens.compactMap { screen -> ScreenInfo? in
             guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
                 return nil
             }
-            return (number.uint32Value, screen)
+            return ScreenInfo(displayID: number.uint32Value, screen: screen, maximumFramesPerSecond: screen.maximumFramesPerSecond)
         }
         loop.perform { [loop] in loop.setScreens(screens) }
     }
@@ -113,6 +113,12 @@ public final class Animator {
             for completion in completions { onComplete(completion.window, completion.epoch) }
         }
     }
+}
+
+private struct ScreenInfo {
+    let displayID: CGDirectDisplayID
+    let screen: NSScreen
+    let maximumFramesPerSecond: Int
 }
 
 /// State shared between the animator thread (writer) and other threads (readers).
@@ -156,8 +162,8 @@ private final class Outbox: @unchecked Sendable {  // all state behind `lock`
 private final class AnimatorLoop: @unchecked Sendable {
     /// Grace period after a tween's deadline before the watchdog completes it.
     private static let watchdogGrace = 0.1
-    /// How far new tweens are back-dated so their first step is written immediately.
-    private static let leadInterval = 1.0 / 60
+    /// Frame interval assumed for a display until its link has fired.
+    private static let defaultFrameInterval = 1.0 / 60
 
     private let sink: FrameSink
     private let outbox: Outbox
@@ -169,6 +175,8 @@ private final class AnimatorLoop: @unchecked Sendable {
     private let running = DispatchSemaphore(value: 0)
     private var isShutDown = false
     private var links: [CGDirectDisplayID: CADisplayLink] = [:]
+    /// Per display: the measured frame interval of its last tick, or 1 / max refresh rate.
+    private var frameIntervals: [CGDirectDisplayID: Double] = [:]
     private var primaryDisplay: CGDirectDisplayID?
     private var watchdog: CFRunLoopTimer?
 
@@ -225,12 +233,14 @@ private final class AnimatorLoop: @unchecked Sendable {
         for index in request.moves.indices where links[request.moves[index].displayID] == nil {
             request.moves[index].displayID = primaryDisplay
         }
-        // Start tweens one frame in the past and step them right away: the first write goes out
-        // now instead of at the next vsync (up to a frame later), and time stays monotonic.
+        // Write the new tweens' frame for the coming vsync (one frame interval into the curve) right
+        // away instead of at the next tick, up to a frame later. Their first tick then continues
+        // exactly one frame further, in phase with vsync (`AnimationScheduler.leadIn`).
         let now = CACurrentMediaTime()
-        deliver(scheduler.apply(request, now: now - Self.leadInterval, cost: cost))
+        deliver(scheduler.apply(request, now: now, cost: cost))
         for displayID in Set(request.moves.map(\.displayID)) where scheduler.hasTweens(on: displayID) {
-            deliver(scheduler.tick(display: displayID, now: now, frameInterval: Self.leadInterval, cost: cost))
+            let interval = frameInterval(displayID)
+            deliver(scheduler.leadIn(display: displayID, now: now + interval, frameInterval: interval, cost: cost))
         }
         scheduleLinksAndWatchdog()
     }
@@ -255,20 +265,27 @@ private final class AnimatorLoop: @unchecked Sendable {
         scheduleLinksAndWatchdog()
     }
 
-    func setScreens(_ screens: [(CGDirectDisplayID, NSScreen)]) {
-        let available = Set(screens.map(\.0))
+    func setScreens(_ screens: [ScreenInfo]) {
+        let available = Set(screens.map(\.displayID))
         for (displayID, link) in links where !available.contains(displayID) {
             link.invalidate()
             links[displayID] = nil
+            frameIntervals[displayID] = nil
         }
-        for (displayID, screen) in screens where links[displayID] == nil {
-            let target = DisplayLinkTarget(loop: self, displayID: displayID)
-            let link = screen.displayLink(target: target, selector: #selector(DisplayLinkTarget.step(_:)))
+        for info in screens where links[info.displayID] == nil {
+            let target = DisplayLinkTarget(loop: self, displayID: info.displayID)
+            let link = info.screen.displayLink(target: target, selector: #selector(DisplayLinkTarget.step(_:)))
+            let fps = Float(info.maximumFramesPerSecond)
+            if fps > 0 {
+                // Ask for the panel's full rate (120 Hz on ProMotion) rather than leaving it to the system.
+                link.preferredFrameRateRange = CAFrameRateRange(minimum: fps / 2, maximum: fps, preferred: fps)
+                frameIntervals[info.displayID] = 1 / Double(fps)
+            }
             link.isPaused = true
             link.add(to: .current, forMode: .common)
-            links[displayID] = link
+            links[info.displayID] = link
         }
-        primaryDisplay = screens.first?.0
+        primaryDisplay = screens.first?.displayID
         if let primaryDisplay {
             scheduler.reassignDisplays(available: available, fallback: primaryDisplay)
         } else {
@@ -281,7 +298,8 @@ private final class AnimatorLoop: @unchecked Sendable {
 
     fileprivate func displayLinkFired(_ displayID: CGDirectDisplayID, _ link: CADisplayLink) {
         let measured = link.targetTimestamp - link.timestamp
-        let frameInterval = measured > 0 ? measured : (link.duration > 0 ? link.duration : 1.0 / 60)
+        let frameInterval = measured > 0 ? measured : (link.duration > 0 ? link.duration : frameInterval(displayID))
+        frameIntervals[displayID] = frameInterval
         deliver(scheduler.tick(display: displayID, now: link.targetTimestamp, frameInterval: frameInterval, cost: cost))
         scheduleLinksAndWatchdog()
     }
@@ -292,6 +310,10 @@ private final class AnimatorLoop: @unchecked Sendable {
     }
 
     private func cost(_ window: UInt32) -> WriteCost { sink.cost(window: window) }
+
+    private func frameInterval(_ displayID: CGDirectDisplayID) -> Double {
+        frameIntervals[displayID] ?? Self.defaultFrameInterval
+    }
 
     /// Runs exactly the links whose display has tweens and arms the watchdog for the
     /// earliest deadline.

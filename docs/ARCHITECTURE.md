@@ -225,9 +225,24 @@ Animation rules (owned by SilkAnimation):
   Final: `size, position, size`, then one read-back.
 * Overshooting curves apply overshoot to position only; size is clamped to [from, to].
   The default curve is ease-out without overshoot: tiles sit one gap from the screen
-  edges, and the window server clamps a window that overshoots into the menu bar.
-* New tweens are back-dated one frame and stepped immediately, so the first write goes
-  out with the request instead of at the next vsync.
+  edges, and the window server clamps a window that overshoots into the menu bar. It is
+  quartic (0.25, 1, 0.5, 1): 33 % of a 180 ms move in the first 60 Hz frame, 90 % after
+  five. Expo-out (0.16, 1, 0.3, 1) put 47 % in the first frame and 72 % by the second, then
+  crept for six frames — measured as a jump followed by a crawl.
+* New tweens get a lead-in write with the request: their frame for the coming vsync (one
+  frame interval into the curve) instead of waiting for the next tick. Their first tick then
+  re-phases the timeline so it advances exactly one frame interval past the lead-in, so a
+  move shows curve times 1, 2, 3… frames on consecutive vsyncs however the request lined up
+  with vsync. (Measured on a 60 Hz panel: an unpaused display link fires at the next vsync
+  and targets the one after; back-dating against the request time instead skipped up to a
+  frame of motion on the second frame, where ease-out moves fastest.) A request steps only
+  its new tweens; running ones keep their vsync-aligned frames.
+* Display links ask for the panel's full refresh rate (`preferredFrameRateRange`).
+* Echo notifications are read back even mid-animation. Each read costs 1–4 ms while the app
+  applies a move (0.03 ms idle), but skipping them while a window animates made no
+  measurable difference to missed frames (live, 60 Hz, Arc + Claude), so mid-animation user
+  drags stay detectable. What remains is an occasional single late frame within the first
+  2–3 frames of a move, per app, with nothing else queued on its AX thread: app-side.
 * Workspace switch: incoming windows slide the last 20 % of the monitor into place
   (position only) and are raised, focused last; outgoing windows park in AeroSpace's
   hide corner one frame later, so the desktop never flashes. A full slide-out is not

@@ -41,6 +41,19 @@ struct Run {
         return scheduler.tick(display: display, now: now, frameInterval: interval, cost: { costs[$0] ?? .unmeasured })
     }
 
+    /// A tick of a 60 Hz display whose target time is `elapsed` after the previous `now`.
+    mutating func tick(elapsed: Double) -> SchedulerOutput {
+        now += elapsed
+        let costs = self.costs
+        return scheduler.tick(display: display, now: now, frameInterval: frameInterval60, cost: { costs[$0] ?? .unmeasured })
+    }
+
+    /// The animator's lead-in: the new tweens' frame for the vsync one `interval` from now.
+    mutating func leadIn(interval: Double = frameInterval60) -> SchedulerOutput {
+        let costs = self.costs
+        return scheduler.leadIn(display: display, now: now + interval, frameInterval: interval, cost: { costs[$0] ?? .unmeasured })
+    }
+
     mutating func runToEnd(maxTicks: Int = 600) -> [SchedulerOutput] {
         var outputs: [SchedulerOutput] = []
         for _ in 0..<maxTicks where !scheduler.isIdle {

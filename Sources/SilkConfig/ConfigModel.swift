@@ -162,7 +162,10 @@ public enum AnimationCurve: Equatable, Sendable {
 
     /// Hyprland's default curve (`bezier = myBezier, 0.05, 0.9, 0.1, 1.05`).
     public static let hyprland = AnimationCurve.bezier(0.05, 0.9, 0.1, 1.05)
-    public static let easeOut = AnimationCurve.bezier(0.16, 1, 0.3, 1)
+    /// Quartic ease-out. Expo-out (0.16, 1, 0.3, 1) moved ~47 % of a 180 ms move in its first
+    /// 60 Hz frame, which reads as a jump followed by a crawl; this moves 33 % and is 90 % there
+    /// after five frames (84 ms).
+    public static let easeOut = AnimationCurve.bezier(0.25, 1, 0.5, 1)
     /// `curve = 'spring'`: critically damped, settles in roughly `response` seconds.
     public static let defaultSpring = AnimationCurve.spring(response: 0.3, damping: 1.0)
 }
