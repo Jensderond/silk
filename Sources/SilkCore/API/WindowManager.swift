@@ -234,6 +234,7 @@ public final class WindowManager {
             for window in world.allWindows where window.pid == pid {
                 world.garbageCollect(window)
             }
+            world.forgetClosedWindowSlots(pid: pid)
         }
     }
 

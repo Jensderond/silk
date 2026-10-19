@@ -265,6 +265,9 @@ Animation rules (owned by SilkAnimation):
 * SIGTERM/SIGINT/quit/disable: synchronous move-back of hidden windows with a deadline.
 * Lock screen: freeze model (ignore destroys), reconcile on unlock. Wake/screens: debounce,
   monitors keyed by display UUID, assignments survive transient disconnects.
+* Windows reported destroyed keep their slot (workspace, parent, index) per window id; if the
+  same window comes back (lid closed while docked, monitor unplugged during sleep) it returns
+  there instead of landing on the focused workspace, and `on-window-detected` doesn't rerun.
 * Refuse to start when AeroSpace is running (offer to quit it). Warn on Stage Manager.
   Secure input indicator in the menu bar (Carbon hotkeys stop working).
 * TCC: stable signing identity; detect stale grant and `tccutil reset` like AeroSpace.

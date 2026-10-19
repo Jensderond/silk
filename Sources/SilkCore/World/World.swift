@@ -38,6 +38,10 @@ final class World {
     let minimizedContainer = MacosMinimizedWindowsContainer()
     let popupContainer = MacosPopupWindowsContainer()
     var hiddenApps: Set<pid_t> = []
+    /// Slots of windows reported destroyed, by window id, in case they come back (`rememberClosedWindow`).
+    var closedWindowSlots: [WindowID: ClosedWindowSlot] = [:]
+    var closedWindowSlotCounter = 0
+    static let closedWindowSlotLimit = 256
 
     var focusState: FrozenFocus
     /// The focus the callbacks last saw; nil until the first check after startup (AeroSpace initializes it lazily

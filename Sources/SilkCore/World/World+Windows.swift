@@ -1,12 +1,28 @@
 import CoreGraphics
 
-/// Where an ordered-out window was, so it can come back to the same slot.
-struct OrderedOutSlot {
+/// Where a window left the tree (ordered out, or reported destroyed), so it can come back to the same slot.
+struct WindowSlot {
     weak var parent: TreeNode?
     let workspaceName: String
     let index: Int
     let adaptiveWeight: CGFloat
     let wasFloating: Bool
+
+    init(removedWith data: BindingData, from workspace: Workspace) {
+        parent = data.parent
+        workspaceName = workspace.name
+        index = data.index
+        adaptiveWeight = data.adaptiveWeight
+        wasFloating = data.parent is FloatingWindowsContainer
+    }
+}
+
+/// The slot of a window reported destroyed, kept in case it comes back (see `World.rememberClosedWindow`).
+struct ClosedWindowSlot {
+    let pid: pid_t
+    let slot: WindowSlot
+    /// Insertion order, for evicting the oldest entry.
+    let order: Int
 }
 
 extension World {
@@ -32,7 +48,7 @@ extension World {
         let data = bindingDataForNewWindow(kind: detected.kind, on: workspace)
         window.bind(to: data.parent, adaptiveWeight: data.adaptiveWeight, index: data.index)
         windowsById[window.id] = window
-        if !restorePendingPlacement(of: window) {
+        if !restoreClosedWindowSlot(of: window) && !restorePendingPlacement(of: window) {
             runOnWindowDetected(ifConventional: window)
         }
         return window
@@ -77,12 +93,46 @@ extension World {
     func garbageCollect(_ window: Window, skipClosedWindowsCache: Bool = false) {
         guard windowsById.removeValue(forKey: window.id) != nil else { return }
         if !skipClosedWindowsCache { touchContainersLikeClosedWindowsCache() }
-        guard let parent = window.unbindIfBound()?.parent else { return }
-        refocusAfterRemoving(window, from: parent)
+        let workspace = window.isConventional ? window.nodeWorkspace : nil
+        guard let data = window.unbindIfBound() else {
+            if !skipClosedWindowsCache, let slot = window.orderedOutSlot { rememberClosedWindow(window, slot: slot) }
+            return
+        }
+        if !skipClosedWindowsCache, let workspace {
+            rememberClosedWindow(window, slot: WindowSlot(removedWith: data, from: workspace))
+        }
+        refocusAfterRemoving(window, from: data.parent)
+    }
+
+    /// AeroSpace's closed-windows cache, per window: around the lock screen and display reconfigurations
+    /// (closing the lid while docked, unplugging a monitor during sleep) macOS reports live windows as destroyed and
+    /// they come back with the same id. Without this they'd be detected as new windows on the focused workspace.
+    private func rememberClosedWindow(_ window: Window, slot: WindowSlot) {
+        closedWindowSlotCounter += 1
+        closedWindowSlots[window.id] = ClosedWindowSlot(pid: window.pid, slot: slot, order: closedWindowSlotCounter)
+        if closedWindowSlots.count > World.closedWindowSlotLimit,
+           let oldest = closedWindowSlots.min(by: { $0.value.order < $1.value.order })?.key
+        {
+            closedWindowSlots[oldest] = nil
+        }
+    }
+
+    /// Puts a just-detected window back where it was when it was reported destroyed. False if it wasn't.
+    func restoreClosedWindowSlot(of window: Window) -> Bool {
+        guard let closed = closedWindowSlots.removeValue(forKey: window.id), closed.pid == window.pid else { return false }
+        window.unbindIfBound()
+        bind(window, to: closed.slot)
+        return true
+    }
+
+    /// The app quit: its windows are really gone.
+    func forgetClosedWindowSlots(pid: pid_t) {
+        closedWindowSlots = closedWindowSlots.filter { $0.value.pid != pid }
     }
 
     /// AeroSpace snapshots the whole world when a window dies on its own (`cacheClosedWindowIfNeeded`, its defence
-    /// against the lock screen). Silk doesn't keep that snapshot but reproduces its side effect on the tree: it creates every workspace's root, floating, hidden-apps and fullscreen containers if missing, and each
+    /// against the lock screen). Silk keeps each window's slot instead (`rememberClosedWindow`) and reproduces the
+    /// snapshot's side effect on the tree: it creates every workspace's root, floating, hidden-apps and fullscreen containers if missing, and each
     /// new container becomes its workspace's most recent child. Until a window of the workspace is marked most recent
     /// again, focusing the workspace focuses its first window.
     private func touchContainersLikeClosedWindowsCache() {
@@ -115,22 +165,20 @@ extension World {
     /// The window is still alive but off screen (another Space, Electron `hide()`): drop it from the tree but
     /// remember its slot.
     func orderOut(_ window: Window) {
-        guard window.isConventional, let parent = window.parent, let workspace = window.nodeWorkspace,
-              let data = window.unbindIfBound() else { return }
-        window.orderedOutSlot = OrderedOutSlot(
-            parent: parent,
-            workspaceName: workspace.name,
-            index: data.index,
-            adaptiveWeight: data.adaptiveWeight,
-            wasFloating: parent is FloatingWindowsContainer
-        )
-        refocusAfterRemoving(window, from: parent)
+        guard window.isConventional, let workspace = window.nodeWorkspace, let data = window.unbindIfBound() else { return }
+        window.orderedOutSlot = WindowSlot(removedWith: data, from: workspace)
+        refocusAfterRemoving(window, from: data.parent)
     }
 
-    /// An ordered-out window is back: return it to its slot if that still exists, else to its workspace.
+    /// An ordered-out window is back.
     func orderIn(_ window: Window) {
         guard let slot = window.orderedOutSlot, window.parent == nil else { return }
         window.orderedOutSlot = nil
+        bind(window, to: slot)
+    }
+
+    /// Returns a window to its slot if that still exists, else to its workspace.
+    private func bind(_ window: Window, to slot: WindowSlot) {
         if let parent = slot.parent, parent.nodeWorkspace?.name == slot.workspaceName {
             window.bind(to: parent, adaptiveWeight: slot.adaptiveWeight, index: min(slot.index, parent.children.count))
         } else if slot.wasFloating {

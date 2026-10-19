@@ -87,6 +87,37 @@ import Testing
         #expect(root.layoutDescription == .h_tiles([.window(1), .window(2), .window(3)]))
     }
 
+    /// Around the lock screen and display changes (lid closed while docked, monitor unplugged during sleep) macOS
+    /// can report live windows as destroyed; they come back with the same id. They return to their old slot, not
+    /// the focused workspace, and `on-window-detected` doesn't run again.
+    @Test func windowsReportedDestroyedComeBackToTheirSlot() {
+        var rule = WindowDetectedRule()
+        rule.run = CommandScripts(["move-node-to-workspace detected"])
+        let t = TestHarness(config: testConfig { $0.onWindowDetected = [rule] })
+        let other = t.workspace("other").rootTilingContainer
+        t.window(1, in: other, pid: 10)
+        t.window(2, in: other, pid: 10)
+        t.window(3, in: other, pid: 10)
+        t.window(4, in: t.workspace("other").floatingWindowsContainer, pid: 10)
+        #expect(t.world.focus.workspace.name != "other")
+
+        for id: WindowID in [2, 4] { t.manager.windowDestroyed(id) }
+        t.detect(2, pid: 10)
+        t.detect(4, pid: 10)
+        #expect(other.layoutDescription == .h_tiles([.window(1), .window(2), .window(3)]))
+        #expect(t.workspace("other").floatingWindows.map(\.id) == [4])
+        #expect(t.world.allWorkspaces.map(\.name).contains("detected") == false)
+
+        // Another process reusing the id is a new window
+        t.manager.windowDestroyed(3)
+        t.detect(3, pid: 20)
+        #expect(t.workspace("detected").allLeafWindowsRecursive.map(\.id) == [3])
+        // The app quit: its windows are really gone
+        t.manager.appTerminated(pid: 10)
+        t.detect(1, pid: 10)
+        #expect(t.workspace("detected").allLeafWindowsRecursive.map(\.id).sorted() == [1, 3])
+    }
+
     @Test func minimizedAndFullscreenWindowsLeaveTheTreeAndComeBack() {
         t.detect(1)
         let floating = t.detect(2, kind: .dialog)!

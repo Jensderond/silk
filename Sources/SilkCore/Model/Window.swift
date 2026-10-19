@@ -35,7 +35,7 @@ final class Window: TreeNode {
     /// Set while the window is parked in a hide corner: its top-left as a proportion of the monitor it was on.
     var prevUnhiddenProportionalPosition: CGPoint?
     /// Set while the window is ordered out (alive but off screen) and removed from the tree.
-    var orderedOutSlot: OrderedOutSlot?
+    var orderedOutSlot: WindowSlot?
 
     init(id: WindowID, pid: pid_t, bundleId: String?, appName: String?, title: String, kind: WindowKind, frame: CGRect?) {
         self.id = id
