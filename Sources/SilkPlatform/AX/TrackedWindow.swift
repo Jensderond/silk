@@ -18,6 +18,9 @@ final class TrackedWindow {
     var isOrderedOut = false
     var echo = EchoRing()
     var lastReclassification: TimeInterval = 0
+    /// Why the window looked destroyed while the screen was locked; non-nil until the first
+    /// reconciliation after unlock re-checks it.
+    var deferredDestroyReason: String?
 
     init(id: UInt32, element: AXUIElement, trackingOrder: Int, snapshot: WindowSnapshot, dump: AXWindowDump) {
         self.id = id

@@ -54,6 +54,9 @@ Rules:
   left-mouse-up, space change, screen change, wake, unlock, and a 2 s timer while dirty.
   Liveness = `kAXUIElementDestroyed` or a read returning `kAXErrorInvalidUIElement`
   (never "absent from `kAXWindows`" — that omits other-Space and fullscreen windows).
+  While the screen is locked neither counts: the window is flagged and re-checked with
+  `kAXRole` by the first reconciliation after unlock, so only app termination destroys
+  windows while locked. Every destroy is logged (`silk.platform`) with the path that fired.
   Windows still valid but absent and off-screen are **ordered out** (keep tree slot
   info, drop from layout, reinsert when they reappear).
 * **Per-app threads**, one `AXObserver` per app, `AXUIElementSetMessagingTimeout` 1 s on

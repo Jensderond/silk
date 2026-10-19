@@ -8,6 +8,9 @@ extension AppWorker {
     static let onScreenPollDelays: [TimeInterval] = [0.016, 0.05, 0.1, 0.25, 0.5, 1]
     static let popupReclassificationThrottle: TimeInterval = 0.5
 
+    /// Bundle id (or pid) for log lines.
+    var appLabel: String { identity.bundleId ?? "pid \(pid)" }
+
     var traits: AppTraits {
         AppTraits(bundleId: identity.bundleId, activationPolicy: AppActivationPolicy(app.activationPolicy))
     }
@@ -24,7 +27,7 @@ extension AppWorker {
                     reconcile()
                 }
             case kAXUIElementDestroyedNotification:
-                if let windowID { windowGone(windowID) }
+                if let windowID { windowInvalidated(windowID, reason: "kAXUIElementDestroyed notification") }
             case kAXMovedNotification:
                 if let windowID { frameChanged(windowID, .moved) }
             case kAXResizedNotification:
@@ -100,8 +103,25 @@ extension AppWorker {
         window.subscribed = []
     }
 
-    func windowGone(_ id: UInt32) {
+    /// A read returned `kAXErrorInvalidUIElement` or `kAXUIElementDestroyed` arrived. While the
+    /// screen is locked neither proves the window is gone (apps answer AX with stand-ins, see
+    /// ``ScreenLockState``), so the window is only flagged; the first reconciliation after unlock
+    /// re-checks it (``revalidateDeferredDestroys(isGone:)``). Real closes still go: a window closed
+    /// before the lock was destroyed then, one closed during it is still invalid after unlock.
+    func windowInvalidated(_ id: UInt32, reason: String) {
+        guard let window = windows[id] else { return }
+        guard environment.screenLock.isLocked else { return windowGone(id, reason: reason) }
+        if window.deferredDestroyReason == nil {
+            platformLog.notice("window \(id) [\(self.appLabel, privacy: .public)] looks destroyed while locked (\(reason, privacy: .public)); re-checking on unlock")
+            window.deferredDestroyReason = reason
+        }
+    }
+
+    /// Stops tracking `id` and emits `windowDestroyed`. Every caller names its `reason` (path and
+    /// AX error), logged so an unexpected destroy can be traced back to the path that fired.
+    func windowGone(_ id: UInt32, reason: String) {
         guard let window = windows.removeValue(forKey: id) else { return }
+        platformLog.notice("window \(id) [\(self.appLabel, privacy: .public)] destroyed: \(reason, privacy: .public)")
         unsubscribe(window)
         environment.directory.unregister(id)
         environment.writer.forget(window: id, target: self)
@@ -128,9 +148,11 @@ extension AppWorker {
     private func frameChanged(_ id: UInt32, _ kind: FrameChangeKind) {
         guard let window = windows[id] else { return }
         let (error, values) = window.element.copyValues([kAXPositionAttribute, kAXSizeAttribute, AXAttribute.fullScreen])
-        if error == .invalidUIElement { return windowGone(id) }
+        if error == .invalidUIElement { return windowInvalidated(id, reason: "\(kind) notification: frame read invalidUIElement") }
         guard error == .success else { return }
-        if case .failure(.invalidUIElement) = values[0] { return windowGone(id) }
+        if case .failure(.invalidUIElement) = values[0] {
+            return windowInvalidated(id, reason: "\(kind) notification: kAXPosition invalidUIElement")
+        }
         guard let origin = values[0].point, let size = values[1].size else { return }
         let frame = CGRect(origin: origin, size: size)
         window.snapshot.frame = frame
@@ -163,7 +185,7 @@ extension AppWorker {
     private func titleChanged(_ id: UInt32) {
         guard let window = windows[id] else { return }
         let (error, value) = window.element.copyValue(kAXTitleAttribute)
-        if error == .invalidUIElement { return windowGone(id) }
+        if error == .invalidUIElement { return windowInvalidated(id, reason: "title notification: kAXTitle invalidUIElement") }
         let title = value as? String ?? ""
         guard title != window.snapshot.title else { return }
         window.snapshot.title = title
@@ -180,6 +202,7 @@ extension AppWorker {
     @discardableResult
     func reconcile(discoveredByReconcile: Bool = true, collect: Bool = false) -> [WindowSnapshot] {
         guard isRegistered, let observer, !environment.screenLock.isLocked else { return [] }
+        revalidateDeferredDestroys()
         let (error, elements) = appElement.elements(kAXWindowsAttribute)
         guard error == .success || error == .noValue else {
             hasFailedReads = true
@@ -231,7 +254,7 @@ extension AppWorker {
                     continue
                 }
                 if window.element.copyValue(kAXRoleAttribute).error == .invalidUIElement {
-                    windowGone(window.id)
+                    windowGone(window.id, reason: "reconcile: absent from kAXWindows, off screen, kAXRole invalidUIElement")
                     continue
                 }
                 if !window.isOrderedOut && !window.snapshot.isMinimized && !window.snapshot.isFullscreen && !app.isHidden {
@@ -270,9 +293,26 @@ extension AppWorker {
                 if snapshot.isMinimized != previous.isMinimized { environment.emit(.windowMinimizedChanged(window.id, snapshot.isMinimized)) }
                 if snapshot.isFullscreen != previous.isFullscreen { environment.emit(.windowFullscreenChanged(window.id, snapshot.isFullscreen)) }
             case .invalid:
-                windowGone(window.id)
+                windowInvalidated(window.id, reason: "reclassify (\(throttled ? "popup frame change" : "reconcile")): snapshot read invalidUIElement")
             case .notAWindow, .failed:
                 break
+        }
+    }
+
+    /// Re-checks the windows flagged by ``windowInvalidated(_:reason:)`` while locked: those whose
+    /// element is still invalid are destroyed, the rest keep their slot. `isGone` is a test seam.
+    func revalidateDeferredDestroys(
+        isGone: (AXUIElement) -> Bool = { $0.copyValue(kAXRoleAttribute).error == .invalidUIElement }
+    ) {
+        guard !environment.screenLock.isLocked else { return }
+        for window in windows.values.filter({ $0.deferredDestroyReason != nil }) {
+            let reason = window.deferredDestroyReason ?? ""
+            window.deferredDestroyReason = nil
+            if isGone(window.element) {
+                windowGone(window.id, reason: "unlock re-check: kAXRole invalidUIElement (while locked: \(reason))")
+            } else {
+                platformLog.notice("window \(window.id) [\(self.appLabel, privacy: .public)] survived the lock (while locked: \(reason, privacy: .public))")
+            }
         }
     }
 
@@ -335,7 +375,7 @@ extension AppWorker {
         for window in windows.values {
             let (error, value) = window.element.copyValue(AXAttribute.fullScreen)
             if error == .invalidUIElement {
-                windowGone(window.id)
+                windowInvalidated(window.id, reason: "space change: kAXFullScreen invalidUIElement")
                 continue
             }
             if let isFullscreen = (value as? NSNumber)?.boolValue, isFullscreen != window.snapshot.isFullscreen {

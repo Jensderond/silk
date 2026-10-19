@@ -13,7 +13,9 @@ extension AppWorker {
         beginWriteBurst()
         for write in writes {
             guard let window = windows[write.window] else { continue }
-            if !apply(write, to: window) { windowGone(write.window) }
+            if !apply(write, to: window) {
+                windowInvalidated(write.window, reason: "frame write (\(write.mode == .final ? "final" : "animation tick")): invalidUIElement")
+            }
         }
         endWriteBurst()
     }
