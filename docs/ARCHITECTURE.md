@@ -57,6 +57,13 @@ Rules:
   While the screen is locked neither counts: the window is flagged and re-checked with
   `kAXRole` by the first reconciliation after unlock, so only app termination destroys
   windows while locked. Every destroy is logged (`silk.platform`) with the path that fired.
+* **App termination** does not rely on `didTerminateApplicationNotification`: macOS never
+  posts it for some apps (quitting Find My), and their windows stayed tracked until restart.
+  Every tracked pid also has a kqueue exit source (`AppExitWatch`), and reconciliation, app
+  activation and enumeration reap workers whose process is gone (`kill(pid, 0)` → `ESRCH`).
+  Whichever path sees the exit first stops the worker (`windowDestroyed` per window, then
+  `appTerminated`); the others are no-ops. No worker starts for an app without a process
+  (`NSWorkspace` may still list it), so its windows can't be detected again.
   Windows still valid but absent and off-screen are **ordered out** (keep tree slot
   info, drop from layout, reinsert when they reappear).
 * **Per-app threads**, one `AXObserver` per app, `AXUIElementSetMessagingTimeout` 1 s on

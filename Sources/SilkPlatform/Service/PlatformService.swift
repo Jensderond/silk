@@ -18,21 +18,32 @@ public final class PlatformService {
     public var focusBackend: FocusBackend
 
     private let directory: WindowDirectory
-    private let screenLock = ScreenLockState()
-    private var workers: [pid_t: AppWorker] = [:]
+    let screenLock = ScreenLockState()
+    private(set) var workers: [pid_t: AppWorker] = [:]
     private var activationPolicyObservations: [pid_t: NSKeyValueObservation] = [:]
-    private var onEvent: ((PlatformEvent) -> Void)?
+    private let isProcessAlive: (pid_t) -> Bool
+    private let exitWatch: AppExitWatch
+    /// Set by ``start(onEvent:)``; tests set it directly to observe the termination paths.
+    var onEvent: ((PlatformEvent) -> Void)?
     private var bufferedEvents: [PlatformEvent] = []
     private var pendingEnumerations = 0
     private var observerTokens: [(NotificationCenter, NSObjectProtocol)] = []
     private var mouseUpMonitor: Any?
     private var monitorDebounce: DispatchWorkItem?
 
-    public init(focusBackend: FocusBackend = .appKit) {
+    public convenience init(focusBackend: FocusBackend = .appKit) {
+        self.init(focusBackend: focusBackend, isProcessAlive: AppExitWatch.processExists)
+    }
+
+    /// `isProcessAlive` is a test seam for reaping apps that exited unnoticed.
+    init(focusBackend: FocusBackend, isProcessAlive: @escaping (pid_t) -> Bool) {
         let directory = WindowDirectory()
         self.directory = directory
         self.focusBackend = focusBackend
+        self.isProcessAlive = isProcessAlive
+        self.exitWatch = AppExitWatch(isAlive: isProcessAlive)
         self.writer = FrameWriter(resolveTarget: { directory.worker(for: $0) })
+        exitWatch.onExit = { [weak self] pid, reason in self?.appTerminated(pid, reason: reason) }
     }
 
     deinit {
@@ -63,6 +74,7 @@ public final class PlatformService {
         mouseUpMonitor = nil
         monitorDebounce?.cancel()
         activationPolicyObservations = [:]
+        exitWatch.unwatchAll()
         for worker in workers.values { worker.stop(emitDestroyed: false) }
         workers = [:]
         onEvent = nil
@@ -75,6 +87,7 @@ public final class PlatformService {
     /// back and delivered right after `completion`.
     public func enumerateAll(completion: @escaping ([WindowSnapshot]) -> Void) {
         dispatchPrecondition(condition: .onQueue(.main))
+        reapExitedApps()
         pendingEnumerations += 1
         var snapshots: [WindowSnapshot] = []
         var remaining = 0
@@ -104,7 +117,7 @@ public final class PlatformService {
             if let worker = workers[app.processIdentifier] {
                 worker.perform { worker.enumerate(receive) }
             } else {
-                workers[app.processIdentifier] = makeWorker(app, initialEnumeration: receive)
+                startWorker(app, initialEnumeration: receive)
             }
         }
         for (pid, worker) in workers where !started.contains(pid) {
@@ -216,28 +229,42 @@ public final class PlatformService {
 
     // MARK: - Workers
 
-    private func shouldTrack(_ app: NSRunningApplication) -> Bool {
+    /// Also false for an app whose process is gone: `NSWorkspace` may still list one that quit
+    /// without a termination notification, and a new worker would bring its windows back.
+    func shouldTrack(_ app: NSRunningApplication) -> Bool {
         app.processIdentifier != getpid() && app.bundleIdentifier != Self.lockScreenBundleId && !app.isTerminated
+            && isProcessAlive(app.processIdentifier)
     }
 
-    private func makeWorker(_ app: NSRunningApplication, initialEnumeration: (([WindowSnapshot]) -> Void)? = nil) -> AppWorker {
+    /// Creates and registers the app's worker and watches its process (see ``AppExitWatch``).
+    /// `pid` is a test seam (see ``AppWorker/init(app:pid:environment:initialEnumeration:)``).
+    @discardableResult
+    func startWorker(
+        _ app: NSRunningApplication, pid: pid_t? = nil, initialEnumeration: (([WindowSnapshot]) -> Void)? = nil
+    ) -> AppWorker {
         let environment = AppWorkerEnvironment(directory: directory, writer: writer, screenLock: screenLock) { [weak self] event in
             DispatchQueue.main.async { self?.deliver(event) }
         }
-        return AppWorker(app: app, environment: environment, initialEnumeration: initialEnumeration)
+        let worker = AppWorker(app: app, pid: pid, environment: environment, initialEnumeration: initialEnumeration)
+        workers[worker.pid] = worker
+        exitWatch.watch(worker.pid)
+        return worker
     }
 
     @discardableResult
     private func ensureWorker(_ app: NSRunningApplication) -> AppWorker? {
         guard shouldTrack(app) else { return nil }
-        if let existing = workers[app.processIdentifier] { return existing }
-        let worker = makeWorker(app)
-        workers[app.processIdentifier] = worker
-        return worker
+        return workers[app.processIdentifier] ?? startWorker(app)
     }
 
     private func reconcileAll() {
+        reapExitedApps()
         for worker in workers.values { worker.perform { worker.reconcile() } }
+    }
+
+    /// Backstop for a missed exit: terminates the apps whose process is gone.
+    func reapExitedApps() {
+        exitWatch.reap(Array(workers.keys) + Array(activationPolicyObservations.keys))
     }
 
     // MARK: - System observation
@@ -261,10 +288,12 @@ public final class PlatformService {
         }
         observe(NSWorkspace.didTerminateApplicationNotification) { [weak self] app in
             guard let self, let app else { return }
-            appTerminated(app.processIdentifier)
+            workspaceDidTerminate(app.processIdentifier)
         }
         observe(NSWorkspace.didActivateApplicationNotification) { [weak self] app in
             guard let self, let app, app.bundleIdentifier != Self.lockScreenBundleId else { return }
+            // Quitting an app activates another one: the moment to catch an exit nobody reported.
+            reapExitedApps()
             deliver(.appActivated(app.processIdentifier))
             if let worker = ensureWorker(app) { worker.perform { worker.handleActivation() } }
         }
@@ -311,6 +340,7 @@ public final class PlatformService {
     /// apps that show a window only after login) are picked up when their policy flips.
     private func observeActivationPolicy(_ app: NSRunningApplication) {
         let pid = app.processIdentifier
+        exitWatch.watch(pid)
         activationPolicyObservations[pid] = app.observe(\.activationPolicy) { [weak self] app, _ in
             guard app.activationPolicy == .regular else { return }
             DispatchQueue.main.async { [weak self] in
@@ -321,12 +351,23 @@ public final class PlatformService {
         }
     }
 
-    private func appTerminated(_ pid: pid_t) {
+    /// NSWorkspace's termination notification; a no-op when the exit was already handled.
+    func workspaceDidTerminate(_ pid: pid_t) {
+        guard exitWatch.claimNotification(pid) else { return }
+        appTerminated(pid, reason: "didTerminateApplication notification")
+    }
+
+    /// The one termination path, entered once per app process: from the notification or from
+    /// ``AppExitWatch`` (exit source, reap), whichever comes first. Destroys the app's windows
+    /// even while the screen is locked.
+    private func appTerminated(_ pid: pid_t, reason: String) {
+        exitWatch.unwatch(pid)
         activationPolicyObservations[pid] = nil
         guard let worker = workers.removeValue(forKey: pid) else {
             deliver(.appTerminated(pid))
             return
         }
+        platformLog.notice("app [\(worker.appLabel, privacy: .public)] terminated: \(reason, privacy: .public)")
         worker.stop(emitDestroyed: true) { [weak self] in
             DispatchQueue.main.async { self?.deliver(.appTerminated(pid)) }
         }

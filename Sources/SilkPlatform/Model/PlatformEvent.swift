@@ -37,7 +37,8 @@ public enum PlatformEvent: Sendable, Equatable {
     /// Also sent after the app is activated.
     case focusedWindowChanged(pid: pid_t, window: UInt32?)
     case appLaunched(pid_t)
-    /// Sent after `windowDestroyed` for every window of the app that was still tracked.
+    /// Sent after `windowDestroyed` for every window of the app that was still tracked. Once per
+    /// process, also when macOS posts no termination notification (the process itself is watched).
     case appTerminated(pid_t)
     case appActivated(pid_t)
     case appHidden(pid_t)

@@ -59,11 +59,16 @@ final class AppWorker: FrameWriteTarget {
 
     /// Starts the worker thread. `initialEnumeration`, when given, receives the snapshots of the
     /// app's existing windows (instead of `windowAppeared` events) once registration first succeeds,
-    /// or `[]` if the first registration attempt fails.
-    init(app: NSRunningApplication, environment: AppWorkerEnvironment, initialEnumeration: (([WindowSnapshot]) -> Void)?) {
-        self.pid = app.processIdentifier
+    /// or `[]` if the first registration attempt fails. `pid` overrides `app.processIdentifier`
+    /// (a test seam: in a bare test process `NSRunningApplication.current` has none).
+    init(
+        app: NSRunningApplication, pid: pid_t? = nil, environment: AppWorkerEnvironment,
+        initialEnumeration: (([WindowSnapshot]) -> Void)?
+    ) {
+        let pid = pid ?? app.processIdentifier
+        self.pid = pid
         self.app = app
-        self.identity = AppIdentity(pid: app.processIdentifier, bundleId: app.bundleIdentifier, name: app.localizedName)
+        self.identity = AppIdentity(pid: pid, bundleId: app.bundleIdentifier, name: app.localizedName)
         self.environment = environment
         self.initialEnumeration = initialEnumeration
         let thread = Thread { [self] in runThread() }
