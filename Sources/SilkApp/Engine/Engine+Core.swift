@@ -109,7 +109,17 @@ extension Engine: @preconcurrency WindowManagerDelegate {
     }
 
     func windowManager(_ manager: WindowManager, didChangeEnabled isEnabled: Bool) {
-        if !isEnabled { border?.hide() }
+        if !isEnabled {
+            border?.hide()
+            restoreHiddenWindowsSynchronously()
+            // Silk no longer owns any frame: nothing to re-assert, and re-enabling re-applies every tile
+            for id in windows.keys {
+                windows[id]?.isHidden = false
+                windows[id]?.target = nil
+                windows[id]?.needsReassert = false
+                windows[id]?.reassertions = []
+            }
+        }
         registerHotkeys()
         updateStatusBar()
     }

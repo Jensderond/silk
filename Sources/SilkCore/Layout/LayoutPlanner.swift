@@ -27,10 +27,10 @@ struct LayoutPlanner {
                 }
             }
         } else {
-            // Disabled: every workspace is laid out on its monitor and nothing stays hidden
+            // Disabled: windows are left where they are. The engine puts parked windows back on screen when
+            // Silk is disabled; forgetting the corner state makes re-enabling park them from where they are then.
             for workspace in world.allWorkspaces {
                 workspace.allLeafWindowsRecursive.forEach(world.unhideFromCorner)
-                layout.layoutWorkspace(workspace)
             }
         }
 

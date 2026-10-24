@@ -168,8 +168,12 @@ import Testing
         #expect(t.run("workspace b") == CommandResult(exitCode: 2, stderr: WindowManager.disabledMessage))
         #expect(t.run("enable off") == CommandResult(exitCode: 0, stderr: "Already disabled. Tip: use --fail-if-noop to exit with non-zero code"))
         #expect(t.run("enable off --fail-if-noop").exitCode == 2)
-        // Disabled: everything is laid out, nothing is hidden
-        #expect(t.manager.computeLayout().hidden.isEmpty)
+        // Disabled: windows are left alone, nothing is laid out or hidden
+        let disabledPlan = t.manager.computeLayout()
+        #expect(disabledPlan.frames.isEmpty)
+        #expect(disabledPlan.hidden.isEmpty)
+        t.manager.appChangedFrame(window: 1, frame: CGRect(x: 10, y: 20, width: 300, height: 200))
+        #expect(t.manager.computeLayout().frames.isEmpty)
 
         #expect(t.run("enable toggle").exitCode == 0)
         #expect(t.manager.activeMode == "main")
