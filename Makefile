@@ -10,7 +10,7 @@ QUIT_SILK := if osascript -e 'application id "dev.jensderond.silk" is running' 2
 # The CLI symlink goes to Homebrew's bin when it is writable, else ~/.local/bin.
 CLI_LINK := $(shell if [ -w /opt/homebrew/bin ]; then echo /opt/homebrew/bin/silk; else echo $$HOME/.local/bin/silk; fi)
 
-.PHONY: build test app debug-app install uninstall clean run icon
+.PHONY: build test app debug-app dmg install uninstall clean run icon
 
 build:
 	swift build
@@ -23,6 +23,10 @@ app:
 
 debug-app:
 	scripts/build-app.sh --debug
+
+## build/Silk-<VERSION>.dmg: Silk.app and an Applications link on a background in the icon's style.
+dmg: app
+	scripts/make-dmg.sh
 
 ## Regenerates Resources/AppIcon.icns and the README's Resources/AppIcon.png (committed; builds don't need this).
 icon:

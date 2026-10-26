@@ -144,6 +144,7 @@ make build        # swift build (debug)
 make test         # 390+ unit tests across all modules
 make debug-app    # build/Silk Debug.app (bundle id dev.jensderond.silk.debug, separate state)
 make run          # build and launch the debug app
+make dmg          # build/Silk-<version>.dmg, the drag-to-Applications install image
 ```
 
 Signing uses `$SILK_SIGN_IDENTITY`, else the local "Apple Development" identity, else ad-hoc. A
