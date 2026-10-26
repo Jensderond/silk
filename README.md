@@ -73,6 +73,17 @@ two tiling window managers fight over every window.
 
 `make uninstall` removes the app and the CLI link.
 
+### Updates
+
+Silk checks GitHub for a newer release shortly after launch and then once a day. When there is
+one, a green dot appears on the menu bar label and Silk downloads it in the background. The menu
+then offers **Restart to Update to Silk x.y.z**; if you don't choose it, the update installs the
+next time Silk quits. **Check for Updates…** in the menu checks right away.
+
+Silk only installs a download that is signed with the same certificate as the running app, so
+the Accessibility permission carries over. Debug builds, apps run with `swift run`, and copies
+in a folder Silk can't write to only show the dot; the menu item then opens the release page.
+
 ## Configuration
 
 Silk looks for, in order: `~/.silk.toml`, `~/.config/silk/silk.toml`, `~/.aerospace.toml`,

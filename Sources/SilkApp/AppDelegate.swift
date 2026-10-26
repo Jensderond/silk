@@ -108,6 +108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let engine = Engine(configLoad: load.isFatal ? ConfigLoadResult(config: ConfigLoader.defaultConfig, url: load.url, diagnostics: load.diagnostics, isFatal: true) : load)
         self.engine = engine
         engine.onRequestAccessibility = { [weak self] in self?.showAccessibilityOnboarding() }
+        engine.onRelaunch = { [weak self] in self?.relaunch() }
         engine.start()
         watchAccessibility()
     }

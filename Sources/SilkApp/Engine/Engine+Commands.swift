@@ -112,6 +112,8 @@ extension Engine: StatusBarActions {
         state.workspaces = workspaces
         state.configHasProblems = hasConfigProblems
         state.secureInputActive = platform.isSecureInputEnabled
+        state.update = updateChecker.available
+        state.updateIsReady = state.update.map(updateInstaller.isStaged) ?? false
         statusBar.update(state)
     }
 
@@ -146,6 +148,49 @@ extension Engine: StatusBarActions {
 
     func statusBarRequestAccessibility() {
         onRequestAccessibility?()
+    }
+
+    func statusBarOpenUpdate() {
+        guard let update = updateChecker.available else { return }
+        NSWorkspace.shared.open(update.url)
+    }
+
+    func statusBarInstallUpdate() {
+        guard updateInstaller.install() else {
+            statusBarOpenUpdate()
+            return
+        }
+        onRelaunch?()
+    }
+
+    /// A check the user asked for: says what it found.
+    func statusBarCheckForUpdates() {
+        updateChecker.check { [weak self] outcome in
+            guard let self else { return }
+            switch outcome {
+                case .available(let release):
+                    let isReady = self.updateInstaller.isStaged(release)
+                    let body = isReady ? "It's downloaded and ready to install."
+                        : UpdateInstaller.canInstall && release.downloadURL != nil
+                        ? "It's downloading. Once it's ready, choose Restart to Update in the menu, or it installs the next time Silk quits."
+                        : "Download it from the release page."
+                    var buttons: [MessageWindow.Button] = [
+                        .init(title: "Release Notes", isDefault: !isReady) { [weak self] in
+                            self?.configWindow.close()
+                            self?.statusBarOpenUpdate()
+                        },
+                    ]
+                    if isReady {
+                        buttons.append(.init(title: "Restart to Update", isDefault: true) { [weak self] in self?.statusBarInstallUpdate() })
+                    }
+                    self.showMessage(title: "Silk Updates", heading: "Silk \(release.version) is available", body: body, buttons: buttons)
+                case .upToDate:
+                    self.showMessage(title: "Silk Updates", heading: "Silk is up to date",
+                                      body: "Silk \(UpdateChecker.currentVersion ?? "") is the latest release.")
+                case .failed(let reason):
+                    self.showMessage(title: "Silk Updates", heading: "Couldn't check for updates", body: reason)
+            }
+        }
     }
 
     /// The permission was turned off: show it in the menu bar right away.

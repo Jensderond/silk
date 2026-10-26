@@ -86,7 +86,7 @@ Rules:
 | `SilkPlatform`  | SilkPrivateAPI      | AX workers, observers, snapshots, pure classifier (AeroSpace heuristics + axDumps corpus), frame writer with echo filter + latency stats, focus/raise, monitors, global events, Carbon hotkeys, mouse warp. Knows nothing about trees. |
 | `SilkAnimation` | AppKit, QuartzCore  | Animator thread, display links, tweens/curves/springs, per-app scheduling, focus border window, corner-radius calibration. Knows nothing about AX or trees. |
 | `SilkIPC`       | Foundation          | AeroSpace wire protocol, client + server, both socket paths, `subscribe` streaming. |
-| `SilkApp`       | all                 | `Engine` glue, lifecycle, menu bar, onboarding, login item, hide ledger + crash restore, config error UI, lock/sleep handling. |
+| `SilkApp`       | all                 | `Engine` glue, lifecycle, menu bar, onboarding, login item, hide ledger + crash restore, config error UI, lock/sleep handling, update check and install. |
 | `silk`          | SilkIPC             | CLI, argv-compatible with `aerospace`. |
 
 Swift 5 language mode, macOS 14+.

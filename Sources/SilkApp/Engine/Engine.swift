@@ -21,6 +21,8 @@ final class Engine {
     let hotkeys = HotkeyCenter()
     private(set) var statusBar: StatusBarController!
     let stateStore = StateStore()
+    let updateChecker = UpdateChecker()
+    let updateInstaller = UpdateInstaller()
     let configWindow = MessageWindow()
     var ipcServer: IPCServer?
 
@@ -47,6 +49,8 @@ final class Engine {
     var statusBarUpdateScheduled = false
     /// Opens the Accessibility walkthrough (set by the app delegate).
     var onRequestAccessibility: (() -> Void)?
+    /// Quits and starts the app again (set by the app delegate).
+    var onRelaunch: (() -> Void)?
     struct PendingFocus {
         let id = UUID()
         var window: UInt32
@@ -108,6 +112,13 @@ final class Engine {
         }
         registerHotkeys()
         reportConfigProblems(configLoad, manager.configDiagnostics)
+        updateChecker.onChange = { [weak self] in
+            guard let self else { return }
+            if let release = self.updateChecker.available { self.updateInstaller.prepare(release) }
+            self.updateStatusBar()
+        }
+        updateInstaller.onChange = { [weak self] in self?.updateStatusBar() }
+        updateChecker.start()
         updateStatusBar()
         LoginItem.set(enabled: config.startAtLogin)
         warnAboutStageManager()
@@ -229,7 +240,10 @@ final class Engine {
         isShutDown = true
         restoreHiddenWindowsSynchronously()
         hotkeys.unregisterAll()
+        updateChecker.stop()
         ipcServer?.stop()
         platform.stop()
+        // A downloaded update installs on quit; the next launch runs it.
+        updateInstaller.install()
     }
 }
