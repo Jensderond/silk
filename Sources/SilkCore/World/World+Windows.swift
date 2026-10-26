@@ -34,6 +34,17 @@ extension World {
         let workspace = bindByMonitorUnderCenter
             ? activeWorkspace(on: detected.frame.map { monitorApproximation($0.center) } ?? mainMonitor)
             : focus.workspace
+        let data = bindingDataForNewWindow(kind: detected.kind, on: workspace)
+        let window = makeWindow(detected)
+        window.bind(to: data.parent, adaptiveWeight: data.adaptiveWeight, index: data.index)
+        if !restoreClosedWindowSlot(of: window) && !restorePendingPlacement(of: window) {
+            runOnWindowDetected(ifConventional: window)
+        }
+        return window
+    }
+
+    /// A new, unbound window known by id.
+    private func makeWindow(_ detected: DetectedWindow) -> Window {
         let window = Window(
             id: detected.id,
             pid: detected.pid,
@@ -45,13 +56,35 @@ extension World {
         )
         window.isMacosMinimized = detected.isMinimized
         window.isMacosFullscreen = detected.isFullscreen
-        let data = bindingDataForNewWindow(kind: detected.kind, on: workspace)
-        window.bind(to: data.parent, adaptiveWeight: data.adaptiveWeight, index: data.index)
         windowsById[window.id] = window
-        if !restoreClosedWindowSlot(of: window) && !restorePendingPlacement(of: window) {
-            runOnWindowDetected(ifConventional: window)
-        }
         return window
+    }
+
+    /// `detected` takes `replaced`'s place (see `WindowManager.windowReplaced`): same slot, weight and focus.
+    /// To the user it's the same window showing another tab, so a new one isn't "opened" (no open animation, no
+    /// `on-window-detected`), and a closed tab isn't a closed window (no refocus, no closed-window slot).
+    func replace(_ replaced: Window, with detected: DetectedWindow, replacedIsGone: Bool) {
+        guard let workspace = replaced.nodeWorkspace else { return }
+        let window = windowsById[detected.id] ?? makeWindow(detected)
+        window.title = detected.title
+        window.lastKnownFrame = detected.frame ?? replaced.lastKnownFrame
+        window.pendingInitialFrame = nil
+        window.orderedOutSlot = nil
+        window.isFullscreen = replaced.isFullscreen
+        window.noOuterGapsInFullscreen = replaced.noOuterGapsInFullscreen
+        window.lastFloatingSize = replaced.lastFloatingSize
+        window.prevUnhiddenProportionalPosition = replaced.prevUnhiddenProportionalPosition
+        window.unbindIfBound()
+        let wasFocused = focus.window === replaced
+        let data = replaced.unbindFromParent()
+        window.bind(to: data.parent, adaptiveWeight: data.adaptiveWeight, index: data.index)
+        if replacedIsGone {
+            windowsById[replaced.id] = nil
+        } else {
+            // Should the tab come back as a window of its own, it goes next to this one
+            replaced.orderedOutSlot = WindowSlot(removedWith: data, from: workspace)
+        }
+        if wasFocused { focusWindow(window) }
     }
 
     /// Where a new (or re-laid-out) window goes: popups to the popup container, dialogs float, windows tile next

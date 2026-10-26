@@ -16,6 +16,9 @@ final class TrackedWindow {
     var snapshot: WindowSnapshot
     var dump: AXWindowDump
     var isOrderedOut = false
+    /// In `kAXWindows` at the last reconciliation. Some windows never are; only listed ones can
+    /// hand their slot over to a native tab (``TabHandoff``).
+    var isListed = false
     var echo = EchoRing()
     var lastReclassification: TimeInterval = 0
     /// Why the window looked destroyed while the screen was locked; non-nil until the first

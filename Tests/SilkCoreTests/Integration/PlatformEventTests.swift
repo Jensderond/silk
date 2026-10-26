@@ -87,6 +87,75 @@ import Testing
         #expect(root.layoutDescription == .h_tiles([.window(1), .window(2), .window(3)]))
     }
 
+    /// Native tabs are windows of their own that share one frame: selecting, opening or closing a tab swaps which one
+    /// is on screen. The incoming tab takes the outgoing tab's slot, size and focus, so nothing moves.
+    @Test func aTabTakesThePlaceOfTheTabItReplaces() {
+        var rule = WindowDetectedRule()
+        rule.run = CommandScripts(["move-node-to-workspace detected"])
+        let t = TestHarness(config: testConfig { $0.onWindowDetected = [rule] })
+        let root = t.world.focus.workspace.rootTilingContainer
+        t.window(1, in: root, weight: 3, pid: 10)
+        t.window(2, in: root, weight: 1, pid: 20)
+        t.manager.nativeFocusChanged(window: 1, pid: 10)
+        let tabFrame = t.manager.computeLayout().frames[1]
+        let tab = { (id: WindowID) in DetectedWindow(id: id, pid: 10, bundleId: "com.apple.finder", appName: "Finder", title: "Tab \(id)", frame: tabFrame) }
+        t.platform.focused = []
+
+        // A new tab: not a new tile, no open animation, no on-window-detected
+        t.manager.windowReplaced(1, by: tab(5), replacedIsGone: false)
+        #expect(root.layoutDescription == .h_tiles([.window(5), .window(2)]))
+        let plan = t.manager.computeLayout()
+        #expect(plan.frames[5] == tabFrame)
+        #expect(plan.newlyPlaced[5] == nil)
+        #expect(plan.frames[1] == nil)
+        #expect(t.manager.focusedWindow == 5)
+        #expect(t.world.allWorkspaces.map(\.name).contains("detected") == false)
+        #expect(t.run("list-windows --all --format %{window-id}").stdout == "5\n2")
+
+        // Switching back
+        t.manager.windowReplaced(5, by: tab(1), replacedIsGone: false)
+        #expect(root.layoutDescription == .h_tiles([.window(1), .window(2)]))
+        #expect(t.manager.computeLayout().frames[1] == tabFrame)
+
+        // Closing the selected tab shows the other one; focus stays in the window, macOS isn't asked to move it
+        t.manager.windowReplaced(1, by: tab(5), replacedIsGone: false)
+        t.manager.windowReplaced(5, by: tab(1), replacedIsGone: true)
+        #expect(t.world.window(byId: 5) == nil)
+        #expect(root.layoutDescription == .h_tiles([.window(1), .window(2)]))
+        #expect(t.manager.focusedWindow == 1)
+        #expect(t.platform.focused.isEmpty)
+    }
+
+    @Test func aTabInheritsFullscreenAndAnUnfocusedOneLeavesFocusAlone() {
+        let root = t.world.focus.workspace.rootTilingContainer
+        t.window(1, in: root, pid: 10)
+        let other = t.window(2, in: root, pid: 20)
+        t.world.window(byId: 1)?.isFullscreen = true
+        t.focus(other)
+        t.manager.windowReplaced(1, by: DetectedWindow(id: 5, pid: 10, bundleId: nil, appName: nil, frame: nil), replacedIsGone: false)
+        #expect(t.world.window(byId: 5)?.isFullscreen == true)
+        #expect(t.manager.focusedWindow == 2)
+    }
+
+    /// Without a slot to hand over (unknown or untiled window, Silk disabled) it's a plain order-out plus detection.
+    @Test func aReplacementWithoutASlotIsAnOrderOutAndADetection() {
+        t.detect(1)
+        t.detect(2)
+        t.manager.windowReplaced(9, by: DetectedWindow(id: 5, pid: 1, bundleId: nil, appName: nil, frame: nil), replacedIsGone: true)
+        #expect(t.world.focus.workspace.rootTilingContainer.allLeafWindowsRecursive.map(\.id).sorted() == [1, 2, 5])
+
+        t.manager.windowMinimizedChanged(1, isMinimized: true)
+        t.manager.windowReplaced(1, by: DetectedWindow(id: 6, pid: 1, bundleId: nil, appName: nil, frame: nil), replacedIsGone: false)
+        #expect(t.world.window(byId: 6)?.parent is TilingContainer)
+
+        #expect(t.run("enable off").exitCode == 0)
+        t.manager.windowReplaced(2, by: DetectedWindow(id: 7, pid: 1, bundleId: nil, appName: nil, frame: nil), replacedIsGone: true)
+        #expect(t.world.window(byId: 7) == nil)
+        #expect(t.world.window(byId: 2) == nil)
+        #expect(t.run("enable on").exitCode == 0)
+        #expect(t.world.window(byId: 7) != nil)
+    }
+
     /// Around the lock screen and display changes (lid closed while docked, monitor unplugged during sleep) macOS
     /// can report live windows as destroyed; they come back with the same id. They return to their old slot, not
     /// the focused workspace, and `on-window-detected` doesn't run again.

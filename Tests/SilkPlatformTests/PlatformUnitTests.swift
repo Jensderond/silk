@@ -36,6 +36,29 @@ struct EchoRingTests {
     }
 }
 
+struct TabHandoffTests {
+    private let tab = CGRect(x: 2014, y: 38, width: 1338, height: 1843)
+
+    @Test func pairsALeavingWindowWithOneArrivingAtTheSameFrame() {
+        let pairs = TabHandoff.pair(
+            departing: [.init(id: 1, frame: tab)],
+            arriving: [.init(id: 7, frame: CGRect(x: 0, y: 0, width: 500, height: 500)), .init(id: 5, frame: tab.offsetBy(dx: 0.5, dy: -1))]
+        )
+        #expect(pairs.map(\.departing) == [1])
+        #expect(pairs.map(\.arriving) == [5])
+    }
+
+    @Test func eachArrivalPairsOnceAndFramelessWindowsNever() {
+        let pairs = TabHandoff.pair(
+            departing: [.init(id: 1, frame: tab), .init(id: 2, frame: tab), .init(id: 3, frame: nil)],
+            arriving: [.init(id: 5, frame: tab), .init(id: 6, frame: nil)]
+        )
+        #expect(pairs.map(\.departing) == [1])
+        #expect(pairs.map(\.arriving) == [5])
+        #expect(TabHandoff.pair(departing: [.init(id: 1, frame: tab)], arriving: [.init(id: 5, frame: tab.insetBy(dx: 2, dy: 0))]).isEmpty)
+    }
+}
+
 struct RegistrationBackoffTests {
     @Test func followsTheScheduleThenRepeatsTheLastStepUntilGivingUp() {
         var backoff = RegistrationBackoff()

@@ -23,15 +23,18 @@ extension Engine {
                     manager.windowReclassified(snapshot.id, kind: SilkCore.WindowKind(snapshot.kind))
                 }
             case .windowDestroyed(let id):
-                if pendingFocus?.window == id { replayDeferredFocus() }
-                detectionsDeferredUntilMouseUp[id] = nil
-                windows[id] = nil
-                animator.cancel(window: id)
+                forget(window: id)
                 manager.windowDestroyed(id)
             case .windowOrderedOut(let id):
                 manager.windowOrderedOut(id)
             case .windowOrderedIn(let id):
                 manager.windowOrderedIn(id)
+            case .windowReplaced(let replaced, let snapshot, _, let replacedIsGone):
+                if replacedIsGone { forget(window: replaced) }
+                // Shown at the tab group's frame, wherever Silk last put it
+                windows[snapshot.id, default: TrackedWindow(pid: snapshot.pid)].lastKnownFrame = snapshot.frame
+                windows[snapshot.id]?.target = nil
+                manager.windowReplaced(replaced, by: DetectedWindow(snapshot), replacedIsGone: replacedIsGone)
             case .windowTitleChanged(let id, let title):
                 manager.windowTitleChanged(id, title: title)
             case .windowMinimizedChanged(let id, let minimized):
@@ -141,6 +144,14 @@ extension Engine {
         guard let (window, pid) = pending.deferred else { return }
         manager.nativeFocusChanged(window: window, pid: pid)
         scheduleFlush()
+    }
+
+    /// Drops the engine's state for a destroyed window.
+    private func forget(window id: UInt32) {
+        if pendingFocus?.window == id { replayDeferredFocus() }
+        detectionsDeferredUntilMouseUp[id] = nil
+        windows[id] = nil
+        animator.cancel(window: id)
     }
 
     /// Registers a discovered window with the engine and the core.

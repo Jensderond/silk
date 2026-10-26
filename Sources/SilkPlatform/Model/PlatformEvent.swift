@@ -24,6 +24,12 @@ public enum PlatformEvent: Sendable, Equatable {
     case windowOrderedOut(UInt32)
     /// A previously ordered-out window is back.
     case windowOrderedIn(UInt32)
+    /// The window `snapshot` describes took the place of the first window: a native tab was selected, opened or
+    /// closed (each macOS tab is a window of its own; see ``TabHandoff``). The replaced window left `kAXWindows` and
+    /// is ordered out (a background tab) or gone (`replacedIsGone`, the tab was closed). The new one was ordered out
+    /// before, or is reported for the first time (`isNew`); either way this replaces its
+    /// `windowAppeared`/`windowOrderedIn`.
+    case windowReplaced(UInt32, by: WindowSnapshot, isNew: Bool, replacedIsGone: Bool)
     case windowTitleChanged(UInt32, String)
     case windowMinimizedChanged(UInt32, Bool)
     case windowFullscreenChanged(UInt32, Bool)

@@ -50,8 +50,15 @@ Rules:
 * **Incremental, coalesced.** Events mutate the model; layout is computed once per main
   queue turn. Only windows whose target changed are written.
 * **Reconciliation is a safety net**, adding windows only: after observer registration,
-  app activation, app-level focused/main-window change naming an unknown window, global
-  left-mouse-up, space change, screen change, wake, unlock, and a 2 s timer while dirty.
+  app activation, `kAXWindowCreated` for an unknown window, every app-level focused/main-window
+  change, global left-mouse-up, space change, screen change, wake, unlock, and a 2 s timer while dirty.
+* **Native tabs** are windows of their own (Finder, Safari, Terminal): only the selected tab is
+  in `kAXWindows`, and selecting, opening or closing a tab swaps which one, at the tab group's
+  frame, with only a main-window change to show for it. A reconciliation that sees a visible
+  window leave and another arrive at the same frame (`TabHandoff`) emits one `windowReplaced`,
+  and the core gives the arriving tab the leaving tab's slot, weight and focus — no new tile, no
+  `on-window-detected`, no open animation, so nothing moves. A closed tab can be destroyed just
+  before its successor shows: a visible window with ordered-out siblings waits 200 ms for it.
   Liveness = `kAXUIElementDestroyed` or a read returning `kAXErrorInvalidUIElement`
   (never "absent from `kAXWindows`" — that omits other-Space and fullscreen windows).
   While the screen is locked neither counts: the window is flagged and re-checked with

@@ -113,6 +113,24 @@ public final class WindowManager {
         eventSession { world.orderIn(window) }
     }
 
+    /// `window` took the place of `replacedId`: a native tab was selected, opened or closed (each macOS tab is a
+    /// window of its own, and the tabs of one window share its frame). It gets the replaced window's slot, size and
+    /// focus instead of a new tile, so nothing moves. The replaced window is ordered out (a background tab) or gone
+    /// (`replacedIsGone`). Without a slot to hand over this is the plain order-out/destroy plus detection/order-in.
+    public func windowReplaced(_ replacedId: WindowID, by window: DetectedWindow, replacedIsGone: Bool) {
+        guard world.isEnabled, let replaced = world.window(byId: replacedId), replaced.isConventional else {
+            if replacedIsGone { windowDestroyed(replacedId) } else { windowOrderedOut(replacedId) }
+            if world.window(byId: window.id) == nil {
+                windowDetected(window, isStartup: false)
+            } else {
+                windowTitleChanged(window.id, title: window.title)
+                windowOrderedIn(window.id)
+            }
+            return
+        }
+        eventSession { world.replace(replaced, with: window, replacedIsGone: replacedIsGone) }
+    }
+
     /// macOS minimized or restored the window.
     public func windowMinimizedChanged(_ id: WindowID, isMinimized: Bool) {
         guard let window = world.window(byId: id) else { return }

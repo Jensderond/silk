@@ -1,12 +1,22 @@
 import AppKit
 import ApplicationServices
 
+/// A window a reconciliation brought (back), held back while it may pair with a departure (see
+/// ``AppWorker/reconcile(discoveredByReconcile:collect:including:)``).
+private struct Arrival {
+    let window: TrackedWindow
+    let isNew: Bool
+    let discoveredByReconcile: Bool
+}
+
 /// Window tracking, AX notifications and reconciliation. Worker thread only.
 extension AppWorker {
     static let reconcileInterval: TimeInterval = 2
     /// Polls for windows that were not on screen yet when detected (classification depends on the level).
     static let onScreenPollDelays: [TimeInterval] = [0.016, 0.05, 0.1, 0.25, 0.5, 1]
     static let popupReclassificationThrottle: TimeInterval = 0.5
+    /// How long a closed tab waits for the tab its app shows next (``destroyNotified(_:)``).
+    static let tabCloseGrace: TimeInterval = 0.2
 
     /// Bundle id (or pid) for log lines.
     var appLabel: String { identity.bundleId ?? "pid \(pid)" }
@@ -18,16 +28,14 @@ extension AppWorker {
     func handleNotification(_ name: String, element: AXUIElement, windowID: UInt32?) {
         switch name {
             case kAXWindowCreatedNotification:
-                if let window = trackIfNew(element) { announce(window, discoveredByReconcile: false) }
+                if let id = element.windowID, windows[id] == nil { reconcile(including: element) }
             case kAXFocusedWindowChangedNotification:
                 focusedWindowChanged(to: element)
             case kAXMainWindowChangedNotification:
-                if let window = trackIfNew(element) {
-                    announce(window, discoveredByReconcile: false)
-                    reconcile()
-                }
+                // Also for known windows: selecting a native tab only shows up as a main-window change.
+                reconcile(including: element)
             case kAXUIElementDestroyedNotification:
-                if let windowID { windowInvalidated(windowID, reason: "kAXUIElementDestroyed notification") }
+                if let windowID { destroyNotified(windowID) }
             case kAXMovedNotification:
                 if let windowID { frameChanged(windowID, .moved) }
             case kAXResizedNotification:
@@ -103,6 +111,21 @@ extension AppWorker {
         window.subscribed = []
     }
 
+    /// `kAXUIElementDestroyed` arrived. Closing a native tab shows the next one (an ordered-out
+    /// window) around the same moment, sometimes after the destroy: a visible window with
+    /// ordered-out siblings waits ``tabCloseGrace`` (or the reconciliation of the next tab's
+    /// main-window change) so that tab can take its slot (``TabHandoff``).
+    private func destroyNotified(_ id: UInt32) {
+        let reason = "kAXUIElementDestroyed notification"
+        guard let window = windows[id], window.isListed, !window.isOrderedOut, !environment.screenLock.isLocked,
+              windows.values.contains(where: \.isOrderedOut)
+        else { return windowInvalidated(id, reason: reason) }
+        _ = schedule(after: Self.tabCloseGrace) { [self] in
+            reconcile()
+            if windows[id] != nil { windowInvalidated(id, reason: "\(reason), after waiting for a tab to take its place") }
+        }
+    }
+
     /// A read returned `kAXErrorInvalidUIElement` or `kAXUIElementDestroyed` arrived. While the
     /// screen is locked neither proves the window is gone (apps answer AX with stand-ins, see
     /// ``ScreenLockState``), so the window is only flagged; the first reconciliation after unlock
@@ -119,7 +142,8 @@ extension AppWorker {
 
     /// Stops tracking `id` and emits `windowDestroyed`. Every caller names its `reason` (path and
     /// AX error), logged so an unexpected destroy can be traced back to the path that fired.
-    func windowGone(_ id: UInt32, reason: String) {
+    /// Without `emitDestroyed` the caller reports the destroy itself (a closed tab's `windowReplaced`).
+    func windowGone(_ id: UInt32, reason: String, emitDestroyed: Bool = true) {
         guard let window = windows.removeValue(forKey: id) else { return }
         platformLog.notice("window \(id) [\(self.appLabel, privacy: .public)] destroyed: \(reason, privacy: .public)")
         unsubscribe(window)
@@ -127,7 +151,7 @@ extension AppWorker {
         environment.writer.forget(window: id, target: self)
         if focusedWindowID == id { focusedWindowID = nil }
         if manipulatedWindowID == id { manipulatedWindowID = nil }
-        environment.emit(.windowDestroyed(id))
+        if emitDestroyed { environment.emit(.windowDestroyed(id)) }
         updateReconcileTimer()
     }
 
@@ -136,10 +160,7 @@ extension AppWorker {
     private func focusedWindowChanged(to element: AXUIElement) {
         guard !environment.screenLock.isLocked else { return }
         let id = element.windowID
-        if let window = trackIfNew(element) {
-            announce(window, discoveredByReconcile: false)
-            reconcile()
-        }
+        reconcile(including: element)
         focusedWindowID = id
         if let id { confirmFocusVerification(id) }
         environment.emit(.focusedWindowChanged(pid: pid, window: id))
@@ -195,12 +216,14 @@ extension AppWorker {
 
     // MARK: - Reconciliation
 
-    /// One `kAXWindows` read, diffed against the tracked windows. Adds unknown windows, orders out
-    /// windows that are still valid but absent and off screen, orders in returning ones, detects
-    /// destroyed windows by `kAXErrorInvalidUIElement` (never by mere absence), and re-classifies
-    /// popups and not-yet-on-screen windows. With `collect`, new windows are returned instead of announced.
+    /// One `kAXWindows` read, diffed against the tracked windows. Adds unknown windows (and
+    /// `candidate`, the window a notification named), orders out windows that are still valid but
+    /// absent and off screen, orders in returning ones, detects destroyed windows by
+    /// `kAXErrorInvalidUIElement` (never by mere absence), pairs native tab switches
+    /// (``TabHandoff``), and re-classifies popups and not-yet-on-screen windows. With `collect`, new
+    /// windows are returned instead of announced.
     @discardableResult
-    func reconcile(discoveredByReconcile: Bool = true, collect: Bool = false) -> [WindowSnapshot] {
+    func reconcile(discoveredByReconcile: Bool = true, collect: Bool = false, including candidate: AXUIElement? = nil) -> [WindowSnapshot] {
         guard isRegistered, let observer, !environment.screenLock.isLocked else { return [] }
         revalidateDeferredDestroys()
         let (error, elements) = appElement.elements(kAXWindowsAttribute)
@@ -210,65 +233,141 @@ extension AppWorker {
             return []
         }
         hasFailedReads = false
+        let listed = elements.compactMap { element in element.windowID.map { (element, $0) } }
+        let present = Set(listed.map(\.1))
+        // Only when a visible window left can an arriving one be a tab taking its place; then
+        // arrivals and departures are held back until the pass has seen them all.
+        let mayHandOff = !collect && windows.values.contains { $0.isListed && !$0.isOrderedOut && !present.contains($0.id) }
         var collected: [WindowSnapshot] = []
+        var arrivals: [Arrival] = []
         // Windows tracked by this pass: their snapshot is fresh, and a re-classification emitted
         // now would reach the engine before a collected snapshot does.
         var added = Set<UInt32>()
-        func add(_ window: TrackedWindow) {
-            added.insert(window.id)
-            if collect { collected.append(window.snapshot) } else { announce(window, discoveredByReconcile: discoveredByReconcile) }
+        func arrive(_ window: TrackedWindow, isNew: Bool, discovered: Bool = discoveredByReconcile) {
+            if isNew { added.insert(window.id) }
+            if collect {
+                collected.append(window.snapshot)
+            } else if mayHandOff {
+                arrivals.append(Arrival(window: window, isNew: isNew, discoveredByReconcile: discovered))
+            } else {
+                emitArrival(window, isNew: isNew, discoveredByReconcile: discovered)
+            }
         }
 
-        var present = Set<UInt32>()
-        for element in elements {
-            guard let id = element.windowID else { continue }
-            present.insert(id)
+        for (element, id) in listed {
             if let window = windows[id] {
+                window.isListed = true
                 if window.isOrderedOut {
                     window.isOrderedOut = false
-                    environment.emit(.windowOrderedIn(id))
+                    arrive(window, isNew: false)
                 }
                 if !window.isFullySubscribed {
                     window.subscribed = subscribe(window.element, id: id, observer: observer, existing: window.subscribed) ?? window.subscribed
                 }
             } else if let window = trackIfNew(element) {
-                add(window)
+                window.isListed = true
+                arrive(window, isNew: true)
             }
         }
+        if let candidate, let window = trackIfNew(candidate) { arrive(window, isNew: true, discovered: false) }
         if let focused = appElement.element(kAXFocusedWindowAttribute) {
-            if let window = trackIfNew(focused) { add(window) }
+            if let window = trackIfNew(focused) { arrive(window, isNew: true) }
             focusedWindowID = focused.windowID
         }
 
-        let absent = windows.values.filter { !present.contains($0.id) }
+        // Visible windows that left this pass; `goneReason` is set for destroyed ones.
+        var departures: [(window: TrackedWindow, goneReason: String?)] = []
+        let absent = windows.values.filter { !present.contains($0.id) && !added.contains($0.id) }
         if !absent.isEmpty {
             let serverInfo = WindowServerInfo.describe(absent.map(\.id))
             for window in absent {
-                if serverInfo[window.id]?.isOnScreen == true {
-                    // Some windows (e.g. ones found as the focused window) are never listed in
-                    // `kAXWindows`; being back on screen is what brings them back.
-                    if window.isOrderedOut {
-                        window.isOrderedOut = false
-                        environment.emit(.windowOrderedIn(window.id))
+                let canHandOff = mayHandOff && window.isListed && !window.isOrderedOut
+                window.isListed = false
+                if window.element.copyValue(kAXRoleAttribute).error == .invalidUIElement {
+                    let reason = "reconcile: absent from kAXWindows, kAXRole invalidUIElement"
+                    if canHandOff {
+                        departures.append((window, reason))
+                    } else {
+                        windowGone(window.id, reason: reason)
                     }
                     continue
                 }
-                if window.element.copyValue(kAXRoleAttribute).error == .invalidUIElement {
-                    windowGone(window.id, reason: "reconcile: absent from kAXWindows, off screen, kAXRole invalidUIElement")
+                if serverInfo[window.id]?.isOnScreen == true {
+                    // Some windows (e.g. ones found as the focused window) are never listed in
+                    // `kAXWindows`; being back on screen is what brings them back. A visible one
+                    // can also still be on screen for a moment after its tab was switched away.
+                    if window.isOrderedOut {
+                        window.isOrderedOut = false
+                        arrive(window, isNew: false)
+                    } else if canHandOff {
+                        departures.append((window, nil))
+                    }
                     continue
                 }
                 if !window.isOrderedOut && !window.snapshot.isMinimized && !window.snapshot.isFullscreen && !app.isHidden {
                     window.isOrderedOut = true
-                    environment.emit(.windowOrderedOut(window.id))
+                    if canHandOff { departures.append((window, nil)) } else { environment.emit(.windowOrderedOut(window.id)) }
                 }
             }
         }
+        if mayHandOff { handOff(arrivals: arrivals, departures: departures) }
         for window in windows.values where present.contains(window.id) && !added.contains(window.id)
             && (window.snapshot.kind == .popup || window.snapshot.level == nil) {
             reclassify(window, throttled: false)
         }
         updateReconcileTimer()
         return collected
+    }
+
+    private func emitArrival(_ window: TrackedWindow, isNew: Bool, discoveredByReconcile: Bool) {
+        if isNew {
+            announce(window, discoveredByReconcile: discoveredByReconcile)
+        } else {
+            environment.emit(.windowOrderedIn(window.id))
+        }
+    }
+
+    /// Emits the held-back arrivals and departures of a reconciliation, pairing native tab
+    /// switches (``TabHandoff``) into one `windowReplaced` each. A departure still on screen (the
+    /// window server lags `kAXWindows` by a frame or so) only counts when it pairs.
+    private func handOff(arrivals: [Arrival], departures: [(window: TrackedWindow, goneReason: String?)]) {
+        // A returning window's frame is re-read: its app moves it into place as it shows it.
+        for arrival in arrivals where !arrival.isNew {
+            if let frame = arrival.window.element.frame().frame { arrival.window.snapshot.frame = frame }
+        }
+        let pairable = { (window: TrackedWindow) in window.snapshot.kind != .popup }
+        let pairs = TabHandoff.pair(
+            departing: departures.map(\.window).filter(pairable).map { .init(id: $0.id, frame: $0.snapshot.frame) },
+            arriving: arrivals.map(\.window).filter(pairable).map { .init(id: $0.id, frame: $0.snapshot.frame) }
+        )
+        var handedOver: [UInt32: UInt32] = [:] // arriving → departing
+        for pair in pairs { handedOver[pair.arriving] = pair.departing }
+        let departing = Set(pairs.map(\.departing))
+
+        for arrival in arrivals {
+            guard let replacedId = handedOver[arrival.window.id],
+                  let departure = departures.first(where: { $0.window.id == replacedId })
+            else {
+                emitArrival(arrival.window, isNew: arrival.isNew, discoveredByReconcile: arrival.discoveredByReconcile)
+                continue
+            }
+            platformLog.notice("window \(arrival.window.id) [\(self.appLabel, privacy: .public)] takes the place of \(replacedId) (native tab)")
+            if let reason = departure.goneReason {
+                windowGone(replacedId, reason: reason, emitDestroyed: false)
+            } else {
+                departure.window.isOrderedOut = true
+            }
+            environment.emit(.windowReplaced(
+                replacedId, by: arrival.window.snapshot, isNew: arrival.isNew, replacedIsGone: departure.goneReason != nil
+            ))
+        }
+        for (window, goneReason) in departures where !departing.contains(window.id) {
+            if let goneReason {
+                windowGone(window.id, reason: goneReason)
+            } else if window.isOrderedOut {
+                environment.emit(.windowOrderedOut(window.id))
+            }
+        }
     }
 
     /// Full snapshot re-read; emits `windowReclassified` when kind or level changed, and the
