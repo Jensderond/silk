@@ -83,7 +83,10 @@ extension World {
     func syncFocusFromNative(_ nativeFocused: Window?) {
         if nativeFocused?.parent is MacosPopupWindowsContainer { return }
         if nativeFocused?.id != lastKnownNativeFocusedWindowId {
-            if let nativeFocused { focusWindow(nativeFocused) }
+            if let nativeFocused {
+                moveMenuBarAppWindowToVisibleWorkspace(nativeFocused)
+                focusWindow(nativeFocused)
+            }
             lastKnownNativeFocusedWindowId = nativeFocused?.id
         }
         if let nativeFocused { debugWindowsRecorder.record(nativeFocused, world: self) }

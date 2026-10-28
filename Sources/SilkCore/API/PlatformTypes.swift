@@ -25,6 +25,8 @@ public struct DetectedWindow: Equatable, Sendable {
     public var isFullscreen: Bool
     /// The window is the focused window of the frontmost app.
     public var isFocused: Bool
+    /// The app has no Dock icon (activation policy `.accessory`): typically a menu bar app.
+    public var isAccessoryApp: Bool
 
     public init(
         id: WindowID,
@@ -36,7 +38,8 @@ public struct DetectedWindow: Equatable, Sendable {
         kind: WindowKind = .window,
         isMinimized: Bool = false,
         isFullscreen: Bool = false,
-        isFocused: Bool = false
+        isFocused: Bool = false,
+        isAccessoryApp: Bool = false
     ) {
         self.id = id
         self.pid = pid
@@ -48,6 +51,7 @@ public struct DetectedWindow: Equatable, Sendable {
         self.isMinimized = isMinimized
         self.isFullscreen = isFullscreen
         self.isFocused = isFocused
+        self.isAccessoryApp = isAccessoryApp
     }
 }
 

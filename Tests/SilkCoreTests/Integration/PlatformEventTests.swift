@@ -87,6 +87,56 @@ import Testing
         #expect(root.layoutDescription == .h_tiles([.window(1), .window(2), .window(3)]))
     }
 
+    /// A menu bar app's popup (Gitify, an Electron `menubar` window) hides and shows again while the user is on
+    /// another workspace: it comes to them instead of focus switching to the workspace it was first seen on.
+    @Test func menuBarAppWindowsComeToTheVisibleWorkspace() {
+        func detectMenuBarAppWindow(_ id: WindowID, kind: WindowKind = .dialog) {
+            t.manager.windowDetected(
+                DetectedWindow(id: id, pid: 7, bundleId: "com.electron.gitify", appName: "Gitify",
+                               frame: CGRect(x: 0, y: 30, width: 500, height: 400), kind: kind, isAccessoryApp: true),
+                isStartup: false
+            )
+        }
+        t.detect(1)
+        #expect(t.run("workspace X").exitCode == 0)
+        detectMenuBarAppWindow(10)
+        t.manager.windowOrderedOut(10)
+        #expect(t.run("workspace 2").exitCode == 0)
+        t.detect(2)
+
+        // Shown again: joins workspace 2 and takes focus there
+        t.manager.windowOrderedIn(10)
+        #expect(t.world.window(byId: 10)?.nodeWorkspace?.name == "2")
+        t.manager.nativeFocusChanged(window: 10, pid: 7)
+        #expect(t.manager.focusedWorkspace == "2")
+        #expect(t.manager.focusedWindow == 10)
+
+        // Hidden the way Gitify's popup is: reported destroyed, then detected again with the same id
+        #expect(t.run("move-node-to-workspace X").exitCode == 0)
+        t.now = t.now.addingTimeInterval(2) // X wasn't focused just now: closing a window on it doesn't refocus it
+        t.manager.windowDestroyed(10)
+        detectMenuBarAppWindow(10)
+        #expect(t.world.window(byId: 10)?.nodeWorkspace?.name == "2")
+        #expect(t.manager.focusedWorkspace == "2")
+
+        // Focused while still on a hidden workspace (it was never ordered out)
+        #expect(t.run("move-node-to-workspace --window-id 10 X").exitCode == 0)
+        t.manager.nativeFocusChanged(window: 2, pid: 1)
+        t.manager.nativeFocusChanged(window: 10, pid: 7)
+        #expect(t.manager.focusedWorkspace == "2")
+        #expect(t.world.window(byId: 10)?.nodeWorkspace?.name == "2")
+
+        // Tiled windows of menu bar apps and floating windows of regular apps keep their workspace
+        detectMenuBarAppWindow(11, kind: .window)
+        t.detect(12, kind: .dialog)
+        #expect(t.run("workspace 3").exitCode == 0)
+        t.manager.nativeFocusChanged(window: 11, pid: 7)
+        #expect(t.manager.focusedWorkspace == "2")
+        #expect(t.run("workspace 3").exitCode == 0)
+        t.manager.nativeFocusChanged(window: 12, pid: 1)
+        #expect(t.manager.focusedWorkspace == "2")
+    }
+
     /// Native tabs are windows of their own that share one frame: selecting, opening or closing a tab swaps which one
     /// is on screen. The incoming tab takes the outgoing tab's slot, size and focus, so nothing moves.
     @Test func aTabTakesThePlaceOfTheTabItReplaces() {

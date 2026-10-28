@@ -46,7 +46,8 @@ extension DetectedWindow {
             kind: SilkCore.WindowKind(snapshot.kind),
             isMinimized: snapshot.isMinimized,
             isFullscreen: snapshot.isFullscreen,
-            isFocused: snapshot.isFocused
+            isFocused: snapshot.isFocused,
+            isAccessoryApp: snapshot.isAccessoryApp
         )
     }
 }

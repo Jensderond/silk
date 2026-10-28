@@ -27,6 +27,8 @@ final class Window: TreeNode {
     /// macOS state as last reported by the platform.
     var isMacosFullscreen = false
     var isMacosMinimized = false
+    /// The app has no Dock icon: a menu bar app.
+    var isAccessoryApp = false
 
     /// The window's last known physical frame: from detection, our applied frames, the user or the app.
     var lastKnownFrame: CGRect?

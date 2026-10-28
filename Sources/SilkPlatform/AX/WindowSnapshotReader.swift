@@ -78,7 +78,8 @@ enum WindowSnapshotReader {
             level: level,
             createdDuringMouseDrag: isMouseDown,
             subrole: dump.subrole,
-            identifier: dump.identifier
+            identifier: dump.identifier,
+            isAccessoryApp: traits.activationPolicy == .accessory
         ), dump)
     }
 }

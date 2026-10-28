@@ -34,11 +34,13 @@ public struct WindowSnapshot: Sendable, Equatable {
     public var createdDuringMouseDrag: Bool
     public var subrole: String?
     public var identifier: String?
+    /// The app has no Dock icon (activation policy `.accessory`): typically a menu bar app.
+    public var isAccessoryApp: Bool
 
     public init(
         id: UInt32, pid: pid_t, bundleId: String?, appName: String?, title: String, frame: CGRect?,
         kind: WindowKind, isMinimized: Bool, isFullscreen: Bool, isFocused: Bool, isMain: Bool,
-        level: Int?, createdDuringMouseDrag: Bool, subrole: String?, identifier: String?
+        level: Int?, createdDuringMouseDrag: Bool, subrole: String?, identifier: String?, isAccessoryApp: Bool = false
     ) {
         self.id = id
         self.pid = pid
@@ -55,5 +57,6 @@ public struct WindowSnapshot: Sendable, Equatable {
         self.createdDuringMouseDrag = createdDuringMouseDrag
         self.subrole = subrole
         self.identifier = identifier
+        self.isAccessoryApp = isAccessoryApp
     }
 }
