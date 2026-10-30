@@ -27,6 +27,8 @@ public struct DetectedWindow: Equatable, Sendable {
     public var isFocused: Bool
     /// The app has no Dock icon (activation policy `.accessory`): typically a menu bar app.
     public var isAccessoryApp: Bool
+    /// The window's AX subrole (e.g. `kAXStandardWindowSubrole`, Finder's "Quick Look").
+    public var subrole: String?
 
     public init(
         id: WindowID,
@@ -39,7 +41,8 @@ public struct DetectedWindow: Equatable, Sendable {
         isMinimized: Bool = false,
         isFullscreen: Bool = false,
         isFocused: Bool = false,
-        isAccessoryApp: Bool = false
+        isAccessoryApp: Bool = false,
+        subrole: String? = nil
     ) {
         self.id = id
         self.pid = pid
@@ -52,6 +55,7 @@ public struct DetectedWindow: Equatable, Sendable {
         self.isFullscreen = isFullscreen
         self.isFocused = isFocused
         self.isAccessoryApp = isAccessoryApp
+        self.subrole = subrole
     }
 }
 

@@ -47,7 +47,8 @@ extension DetectedWindow {
             isMinimized: snapshot.isMinimized,
             isFullscreen: snapshot.isFullscreen,
             isFocused: snapshot.isFocused,
-            isAccessoryApp: snapshot.isAccessoryApp
+            isAccessoryApp: snapshot.isAccessoryApp,
+            subrole: snapshot.subrole
         )
     }
 }

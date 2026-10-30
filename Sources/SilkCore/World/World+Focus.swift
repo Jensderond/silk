@@ -84,7 +84,7 @@ extension World {
         if nativeFocused?.parent is MacosPopupWindowsContainer { return }
         if nativeFocused?.id != lastKnownNativeFocusedWindowId {
             if let nativeFocused {
-                moveMenuBarAppWindowToVisibleWorkspace(nativeFocused)
+                moveTransientFloatingWindowToVisibleWorkspace(nativeFocused)
                 focusWindow(nativeFocused)
             }
             lastKnownNativeFocusedWindowId = nativeFocused?.id

@@ -137,6 +137,46 @@ import Testing
         #expect(t.manager.focusedWorkspace == "2")
     }
 
+    /// Finder's Quick Look preview (space) is one window macOS re-shows with the same id, reporting it destroyed
+    /// when closed. Shown again while the user is on another workspace, it joins that workspace instead of focus
+    /// switching to the one it was first seen on: it only ever appears in response to a space press.
+    @Test func finderQuickLookPanelComesToTheVisibleWorkspace() {
+        func detectQuickLook(_ id: WindowID, subrole: String? = "Quick Look", isFocused: Bool = true) {
+            t.manager.windowDetected(
+                DetectedWindow(id: id, pid: 7, bundleId: "com.apple.finder", appName: "Finder",
+                               frame: CGRect(x: 100, y: 100, width: 600, height: 400), kind: .dialog,
+                               isFocused: isFocused, subrole: subrole),
+                isStartup: false
+            )
+        }
+        t.detect(1)
+        #expect(t.run("workspace X").exitCode == 0)
+        detectQuickLook(10)
+        t.manager.windowDestroyed(10) // Space pressed again: the panel is reported destroyed
+        #expect(t.run("workspace 2").exitCode == 0)
+        t.detect(2)
+
+        // Pressing space again on workspace 2: joins workspace 2 instead of focus switching back to X
+        detectQuickLook(10)
+        #expect(t.world.window(byId: 10)?.nodeWorkspace?.name == "2")
+        #expect(t.manager.focusedWorkspace == "2")
+        #expect(t.manager.focusedWindow == 10)
+
+        // And from then on it follows the user: shown on workspace 3, it joins it
+        t.manager.windowDestroyed(10)
+        #expect(t.run("workspace 3").exitCode == 0)
+        detectQuickLook(10)
+        #expect(t.world.window(byId: 10)?.nodeWorkspace?.name == "3")
+        #expect(t.manager.focusedWorkspace == "3")
+
+        // A regular Finder dialog (a save panel) keeps its workspace: focusing it switches to its workspace
+        detectQuickLook(12, subrole: "AXDialog", isFocused: false)
+        #expect(t.run("move-node-to-workspace --window-id 12 4").exitCode == 0)
+        t.manager.nativeFocusChanged(window: 12, pid: 7)
+        #expect(t.manager.focusedWorkspace == "4")
+        #expect(t.world.window(byId: 12)?.nodeWorkspace?.name == "4")
+    }
+
     /// Native tabs are windows of their own that share one frame: selecting, opening or closing a tab swaps which one
     /// is on screen. The incoming tab takes the outgoing tab's slot, size and focus, so nothing moves.
     @Test func aTabTakesThePlaceOfTheTabItReplaces() {

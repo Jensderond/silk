@@ -29,6 +29,8 @@ final class Window: TreeNode {
     var isMacosMinimized = false
     /// The app has no Dock icon: a menu bar app.
     var isAccessoryApp = false
+    /// The window's AX subrole, as last reported (e.g. `kAXStandardWindowSubrole`, Finder's "Quick Look").
+    var subrole: String?
 
     /// The window's last known physical frame: from detection, our applied frames, the user or the app.
     var lastKnownFrame: CGRect?
@@ -55,6 +57,11 @@ final class Window: TreeNode {
     var isHiddenInCorner: Bool { prevUnhiddenProportionalPosition != nil }
 
     var isFloating: Bool { parent is FloatingWindowsContainer }
+
+    /// Finder's Quick Look preview (space): a transient panel macOS keeps as one window — it is reported
+    /// destroyed when closed and re-shows with the same id. It can only appear in response to a space press,
+    /// so it can never legitimately sit on a hidden workspace (see `World.moveTransientFloatingWindow…`).
+    var isFinderQuickLook: Bool { bundleId == "com.apple.finder" && subrole == "Quick Look" }
 
     /// Tiled or floating, as opposed to sitting in a macOS special container or being unbound.
     var isConventional: Bool { parent is TilingContainer || parent is FloatingWindowsContainer }

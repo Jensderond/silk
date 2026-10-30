@@ -57,6 +57,7 @@ extension World {
         window.isMacosMinimized = detected.isMinimized
         window.isMacosFullscreen = detected.isFullscreen
         window.isAccessoryApp = detected.isAccessoryApp
+        window.subrole = detected.subrole
         windowsById[window.id] = window
         return window
     }
@@ -156,7 +157,7 @@ extension World {
         guard let closed = closedWindowSlots.removeValue(forKey: window.id), closed.pid == window.pid else { return false }
         window.unbindIfBound()
         bind(window, to: closed.slot)
-        moveMenuBarAppWindowToVisibleWorkspace(window) // Electron `menubar` popups are reported destroyed when hidden
+        moveTransientFloatingWindowToVisibleWorkspace(window) // Electron `menubar` popups are reported destroyed when hidden
         return true
     }
 
@@ -210,14 +211,15 @@ extension World {
         guard let slot = window.orderedOutSlot, window.parent == nil else { return }
         window.orderedOutSlot = nil
         bind(window, to: slot)
-        moveMenuBarAppWindowToVisibleWorkspace(window)
+        moveTransientFloatingWindowToVisibleWorkspace(window)
     }
 
     /// A menu bar app's floating window that shows up on a hidden workspace was put up by the app (a menu bar click,
-    /// a hotkey): without a Dock icon or cmd-tab entry the user can't have gone to it. It joins the visible workspace
-    /// of the monitor it shows on, instead of focus switching to the workspace it was last seen on.
-    func moveMenuBarAppWindowToVisibleWorkspace(_ window: Window) {
-        guard window.isAccessoryApp, window.isFloating, let workspace = window.nodeWorkspace, !isVisible(workspace) else { return }
+    /// a hotkey), and Finder's Quick Look preview only ever appears in response to a space press: the user can't
+    /// have navigated to the workspace it was last seen on. It joins the visible workspace of the monitor it shows
+    /// on, instead of focus switching to that workspace.
+    func moveTransientFloatingWindowToVisibleWorkspace(_ window: Window) {
+        guard window.isAccessoryApp || window.isFinderQuickLook, window.isFloating, let workspace = window.nodeWorkspace, !isVisible(workspace) else { return }
         let target = window.isHiddenInCorner
             ? focus.workspace
             : window.lastKnownFrame.map { activeWorkspace(on: monitorApproximation($0.center)) } ?? focus.workspace
