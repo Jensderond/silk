@@ -156,10 +156,17 @@ make test         # 390+ unit tests across all modules
 make debug-app    # build/Silk Debug.app (bundle id dev.jensderond.silk.debug, separate state)
 make run          # build and launch the debug app
 make dmg          # build/Silk-<version>.dmg, the drag-to-Applications install image
+make release      # build/Silk-<version>.zip and .dmg, notarized: the GitHub release assets
 ```
 
-Signing uses `$SILK_SIGN_IDENTITY`, else the local "Apple Development" identity, else ad-hoc. A
-stable identity keeps the Accessibility grant across rebuilds.
+Signing uses `$SILK_SIGN_IDENTITY`, else the keychain's "Developer ID Application" identity for
+release builds and the local "Apple Development" identity for debug builds, else ad-hoc. A stable
+identity keeps the Accessibility grant across rebuilds.
+
+`make release` notarizes with the `notarytool` keychain profile `$SILK_NOTARY_PROFILE` (default
+`silk`), for the team the Developer ID belongs to. Store it once with
+`xcrun notarytool store-credentials silk --apple-id <apple id> --team-id <team id>` and an
+app-specific password.
 
 The code is split into modules that build and test independently — see
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md):
