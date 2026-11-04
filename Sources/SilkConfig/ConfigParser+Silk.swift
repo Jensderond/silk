@@ -98,6 +98,7 @@ extension ConfigParser {
                 case "width": assign(&borders.width, number(value, path).flatMap { checkRange($0, Self.borderWidthRange, path) })
                 case "radius": assign(&borders.radius, borderRadius(value, path))
                 case "active-color": assign(&borders.activeColor, color(value, path))
+                case "hide-when-alone": assign(&borders.hideWhenAlone, bool(value, path))
                 default: unknownKey(path)
             }
         }

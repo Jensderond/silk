@@ -212,6 +212,8 @@ public struct BorderConfig: Equatable, Sendable {
     public var activeColor = RGBAColor(red: 0x89 / 255, green: 0xB4 / 255, blue: 0xFA / 255)
     /// Corner radius in points; nil = 'auto' (calibrated at runtime to the focused window's corner radius).
     public var radius: Double?
+    /// No border while the focused window is the only tiling or floating window on its workspace.
+    public var hideWhenAlone = false
     public init() {}
 }
 

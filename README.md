@@ -106,6 +106,7 @@ enabled = true
 width = 2
 active-color = '#89b4fa'       # '#RRGGBB', '#RRGGBBAA' or '0xAARRGGBB'
 radius = 'auto'                # or a number of points
+hide-when-alone = false        # true: no border while the focused window is alone on its workspace
 ```
 
 And one top-level option: `focus-backend = 'appkit' | 'skylight'` (`skylight` focuses a specific

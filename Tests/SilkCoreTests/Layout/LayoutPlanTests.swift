@@ -106,6 +106,28 @@ private func monitor(_ id: String, _ x: CGFloat, _ y: CGFloat, _ width: CGFloat,
         t.window(1, in: t.workspace("1").rootTilingContainer)
         #expect(t.manager.computeLayout().frames[1]?.width == 0)
     }
+
+    /// Drives `borders.hide-when-alone`: tiling and floating windows of the focused workspace count, other
+    /// workspaces and native fullscreen windows don't.
+    @Test func focusedWorkspaceWindowCount() {
+        let t = TestHarness()
+        let workspace = t.workspace("1")
+        t.world.focusWorkspace(workspace)
+        #expect(t.manager.computeLayout().focusedWorkspaceWindowCount == 0)
+
+        let first = t.window(1, in: workspace.rootTilingContainer)
+        t.window(2, in: t.workspace("2").rootTilingContainer)
+        t.focus(first)
+        #expect(t.manager.computeLayout().focusedWorkspaceWindowCount == 1)
+
+        t.window(3, in: workspace.floatingWindowsContainer, frame: CGRect(x: 100, y: 100, width: 300, height: 200))
+        #expect(t.manager.computeLayout().focusedWorkspaceWindowCount == 2)
+
+        let column = t.vTiles(workspace.rootTilingContainer)
+        t.window(4, in: column)
+        t.window(5, in: workspace.macosFullscreenWindowsContainer)
+        #expect(t.manager.computeLayout().focusedWorkspaceWindowCount == 3)
+    }
 }
 
 @Suite struct HidingTests {

@@ -141,6 +141,12 @@ extension Engine {
             lastFocusedWindow = nil
             return
         }
+        // `move` and `reorder` are no-ops while hidden, so animation ticks don't bring it back.
+        if manager.config.borders.hideWhenAlone && plan.focusedWorkspaceWindowCount < 2 {
+            border.hide()
+            lastFocusedWindow = focused
+            return
+        }
         let frame = animator.presentedFrame(window: focused) ?? target
         if focused != lastFocusedWindow || !border.isVisible {
             border.show(frame: frame, windowNumber: Int(focused))

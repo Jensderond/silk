@@ -114,6 +114,7 @@ gaps.outer.right =      0
 #     width = 2                      # points, 0-20
 #     active-color = '#89b4fa'
 #     radius = 'auto'                # 'auto' (match the window's own corners) or points, 0-64
+#     hide-when-alone = false        # true: only show it when the workspace has more than one window
 
 # 'main' binding mode declaration
 # See: https://nikitabobko.github.io/AeroSpace/guide#binding-modes

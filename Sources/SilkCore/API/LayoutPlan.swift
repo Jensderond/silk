@@ -17,6 +17,9 @@ public struct LayoutPlan: Equatable, Sendable {
     /// Monitors whose visible workspace changed since the previous plan.
     public var workspaceSwitches: [WorkspaceSwitch]
     public var focusedWindow: WindowID?
+    /// Tiling and floating windows on the focused window's workspace, the focused one included (0 without a
+    /// focused window). Native fullscreen, minimized and hidden-app windows don't count.
+    public var focusedWorkspaceWindowCount: Int
 
     public init(
         epoch: UInt64,
@@ -25,7 +28,8 @@ public struct LayoutPlan: Equatable, Sendable {
         newlyPlaced: [WindowID: CGRect] = [:],
         userDriven: Set<WindowID> = [],
         workspaceSwitches: [WorkspaceSwitch] = [],
-        focusedWindow: WindowID? = nil
+        focusedWindow: WindowID? = nil,
+        focusedWorkspaceWindowCount: Int = 0
     ) {
         self.epoch = epoch
         self.frames = frames
@@ -34,6 +38,7 @@ public struct LayoutPlan: Equatable, Sendable {
         self.userDriven = userDriven
         self.workspaceSwitches = workspaceSwitches
         self.focusedWindow = focusedWindow
+        self.focusedWorkspaceWindowCount = focusedWorkspaceWindowCount
     }
 }
 

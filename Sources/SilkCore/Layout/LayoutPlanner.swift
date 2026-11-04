@@ -61,6 +61,12 @@ struct LayoutPlanner {
         }
         lastVisibleWorkspaces = visible
 
+        let focused = world.focus.window
+        var focusedWorkspaceWindowCount = 0
+        if let workspace = focused?.nodeWorkspace {
+            focusedWorkspaceWindowCount = workspace.rootTilingContainer.allLeafWindowsRecursive.count + workspace.floatingWindows.count
+        }
+
         return LayoutPlan(
             epoch: epoch,
             frames: frames,
@@ -68,7 +74,8 @@ struct LayoutPlanner {
             newlyPlaced: newlyPlaced,
             userDriven: userDriven,
             workspaceSwitches: switches,
-            focusedWindow: world.focus.window?.id
+            focusedWindow: focused?.id,
+            focusedWorkspaceWindowCount: focusedWorkspaceWindowCount
         )
     }
 }

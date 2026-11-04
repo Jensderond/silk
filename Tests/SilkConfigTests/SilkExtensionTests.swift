@@ -116,6 +116,11 @@ import Testing
         #expect(borders.width == 3.5)
         #expect(borders.activeColor == RGBAColor(red: 0xE1 / 255, green: 0xE3 / 255, blue: 0xE4 / 255, alpha: 1))
         #expect(borders.radius == 10)
+        #expect(!borders.hideWhenAlone)
+        #expect(parse("borders.hide-when-alone = true").config.borders.hideWhenAlone)
+        #expect(parse("borders.hide-when-alone = 1").errorDescriptions == [
+            "[ERROR] borders.hide-when-alone: Expected type is 'Bool'. But actual type is 'Int'",
+        ])
 
         #expect(parse("borders.radius = 'auto'").config.borders.radius == nil)
         #expect(parse("borders.radius = 12\nborders.width = 0").config.borders.radius == 12)
