@@ -177,6 +177,38 @@ import Testing
         #expect(t.world.window(byId: 12)?.nodeWorkspace?.name == "4")
     }
 
+    /// Closing Finder's Quick Look preview gives focus back to the Finder window it was opened from, not to the
+    /// workspace's first window: the floating container it leaves empty (and the special containers a closed window
+    /// creates, `touchContainersLikeClosedWindowsCache`) are still the workspace's most recent children.
+    @Test func closingFinderQuickLookRefocusesFinder() {
+        t.detect(1, pid: 1, bundleId: "dev.zed.Zed", appName: "Zed")
+        t.detect(2, pid: 7, bundleId: "com.apple.finder", appName: "Finder", isFocused: true)
+        _ = t.manager.computeLayout()
+        #expect(t.manager.focusedWindow == 2)
+        for _ in 1...2 {
+            t.manager.windowDetected(
+                DetectedWindow(id: 10, pid: 7, bundleId: "com.apple.finder", appName: "Finder",
+                               frame: CGRect(x: 100, y: 100, width: 600, height: 400), kind: .dialog,
+                               isFocused: true, subrole: "Quick Look"),
+                isStartup: false
+            )
+            #expect(t.manager.focusedWindow == 10)
+            t.platform.focused.removeAll()
+
+            t.manager.windowDestroyed(10)
+            #expect(t.manager.focusedWindow == 2)
+            #expect(t.platform.focused.isEmpty) // Finder stays the active app: macOS focuses its window itself
+            t.manager.nativeFocusChanged(window: 2, pid: 7)
+            #expect(t.manager.focusedWindow == 2)
+        }
+
+        // Another app's window closing hands native focus to the remaining one
+        t.manager.nativeFocusChanged(window: 1, pid: 1)
+        t.manager.windowDestroyed(1)
+        #expect(t.manager.focusedWindow == 2)
+        #expect(t.platform.focused == [2])
+    }
+
     /// Native tabs are windows of their own that share one frame: selecting, opening or closing a tab swaps which one
     /// is on screen. The incoming tab takes the outgoing tab's slot, size and focus, so nothing moves.
     @Test func aTabTakesThePlaceOfTheTabItReplaces() {

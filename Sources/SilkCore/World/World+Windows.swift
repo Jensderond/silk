@@ -188,9 +188,14 @@ extension World {
         guard deadWindowWorkspace === focus.workspace || wasRecentlyFocused else { return }
         switch parent {
             case is TilingContainer, is FloatingWindowsContainer, is MacosHiddenAppsWindowsContainer, is MacosFullscreenWindowsContainer:
-                let deadWindowFocus = liveFocus(of: deadWindowWorkspace)
+                // The window focused before it, not the workspace's first window: an emptied floating container (a
+                // closed dialog or Quick Look preview) or a just created special container is no reason to jump.
+                let deadWindowFocus = LiveFocus(
+                    window: deadWindowWorkspace.mostRecentNonEmptyWindowRecursive,
+                    workspace: deadWindowWorkspace
+                )
                 setFocus(deadWindowFocus)
-                if focus.window?.pid != window.pid, let newWindow = deadWindowFocus.window {
+                if let newWindow = deadWindowFocus.window, newWindow.pid != window.pid {
                     platform.focus(window: newWindow.id, pid: newWindow.pid)
                 }
             default:

@@ -32,6 +32,17 @@ extension TreeNode {
 
     var mostRecentWindowRecursive: Window? { self as? Window ?? mostRecentChild?.mostRecentWindowRecursive }
 
+    /// Like `mostRecentWindowRecursive`, but a windowless child (an emptied floating container, a special container
+    /// just created) doesn't end the search: the most recent child that has a window is followed instead.
+    var mostRecentNonEmptyWindowRecursive: Window? {
+        if let window = self as? Window { return window }
+        let rest = children.reversed().filter { child in !mruChildren.contains { $0 === child } }
+        for child in mruChildren + rest {
+            if let window = child.mostRecentNonEmptyWindowRecursive { return window }
+        }
+        return nil
+    }
+
     var anyLeafWindowRecursive: Window? {
         if let window = self as? Window { return window }
         for child in children {
