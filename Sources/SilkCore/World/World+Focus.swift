@@ -81,7 +81,12 @@ extension World {
 
     /// macOS reports a newly focused window: make it the focus (AeroSpace `updateFocusCache`).
     func syncFocusFromNative(_ nativeFocused: Window?) {
-        if nativeFocused?.parent is MacosPopupWindowsContainer { return }
+        if let nativeFocused, nativeFocused.parent is MacosPopupWindowsContainer {
+            // Popups don't take focus, but one that turns out to be a real window does (see `reclassify`)
+            nativeFocusedPopupId = nativeFocused.id
+            return
+        }
+        nativeFocusedPopupId = nil
         if nativeFocused?.id != lastKnownNativeFocusedWindowId {
             if let nativeFocused {
                 moveTransientFloatingWindowToVisibleWorkspace(nativeFocused)

@@ -301,5 +301,7 @@ extension World {
         guard window.parent is MacosPopupWindowsContainer, kind != .popup else { return }
         relayoutWindow(window, on: focus.workspace)
         runOnWindowDetected(ifConventional: window)
+        // macOS focused it while it still looked like a popup, and won't report that again
+        if nativeFocusedPopupId == window.id { syncFocusFromNative(window) }
     }
 }

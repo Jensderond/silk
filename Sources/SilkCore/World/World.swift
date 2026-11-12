@@ -53,6 +53,8 @@ final class World {
     }
     var prevFocusedWorkspaceDate: Date = .distantPast
     var lastKnownNativeFocusedWindowId: WindowID?
+    /// The popup macOS last reported as focused, if focus is still there. Popups are never the core's focus.
+    var nativeFocusedPopupId: WindowID?
     var isRunningFocusCallbacks = false
 
     /// Nil while disabled.

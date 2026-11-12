@@ -33,6 +33,23 @@ import Testing
         #expect(t.manager.focusedWindow != 3)
     }
 
+    @Test func focusedPopupTakesFocusOnceItTurnsOutToBeAWindow() {
+        t.detect(1, isFocused: true)
+        t.detect(2, kind: .popup)
+        t.manager.nativeFocusChanged(window: 2, pid: 1)
+        #expect(t.manager.focusedWindow == 1)
+        t.manager.windowReclassified(2, kind: .window)
+        #expect(t.manager.focusedWindow == 2)
+        t.run("move-node-to-workspace other")
+        #expect(t.workspace("other").rootTilingContainer.layoutDescription == .h_tiles([.window(2)]))
+
+        // Not when focus went elsewhere in the meantime
+        t.detect(3, kind: .popup, isFocused: true)
+        t.manager.nativeFocusChanged(window: 1, pid: 1)
+        t.manager.windowReclassified(3, kind: .window)
+        #expect(t.manager.focusedWindow == 1)
+    }
+
     @Test func detectionAtStartupUsesTheMonitorUnderTheWindowCentre() {
         let right = Monitor(id: "R", name: "Right", frame: CGRect(x: 1920, y: 0, width: 1920, height: 1080), visibleFrame: CGRect(x: 1920, y: 0, width: 1920, height: 1080), isMain: false)
         let t = TestHarness(monitors: [testMonitor, right], finishStartup: false)
