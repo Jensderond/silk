@@ -162,20 +162,54 @@ extension Engine: StatusBarActions {
     }
 
     /// Starts or stops watching the trackpad for three-finger swipes. Swiping left goes to the next
-    /// workspace, like swiping between macOS's own Spaces.
+    /// workspace, like swiping between macOS's own Spaces; it switches when the fingers lift past the
+    /// threshold, and `swipeOverlay` shows on the way whether they are.
     func updateSwipeMonitor() {
         guard settings.settings.swipeBetweenWorkspaces else {
             SwipeMonitor.shared.stop()
             return
         }
-        let started = SwipeMonitor.shared.start { [weak self] direction in
-            MainActor.assumeIsolated {
-                guard let self, self.isStarted, !self.isScreenLocked else { return }
-                _ = self.manager.run(args: ["workspace", direction == .left ? "next" : "prev"])
-                self.flush()
-            }
+        let started = SwipeMonitor.shared.start { [weak self] event in
+            MainActor.assumeIsolated { self?.handleSwipe(event) }
         }
         Trace.log("swipe monitor \(started ? "started" : "unavailable")")
+    }
+
+    private func handleSwipe(_ event: SwipeRecognizer.Event) {
+        guard isStarted, !isScreenLocked else {
+            swipeOverlay.close()
+            return
+        }
+        switch event {
+            case .began(let progress):
+                let (monitor, previous, next) = manager.neighborWorkspaces()
+                let target = { (preview: WindowManager.WorkspacePreview?) in
+                    preview.map { SwipeOverlay.Target(name: $0.name, appNames: $0.appNames) }
+                }
+                let screen = ScreenGeometry.appKitRect(fromTopLeft: monitor.visibleFrame) ?? NSScreen.main?.visibleFrame ?? .zero
+                swipeHasTarget = (left: next != nil, right: previous != nil)
+                swipeOverlay.begin(on: screen, left: target(next), right: target(previous),
+                                   threshold: CGFloat(SwipeRecognizer.commitThreshold))
+                updateSwipeOverlay(progress)
+            case .changed(let progress):
+                updateSwipeOverlay(progress)
+            case .ended(let direction):
+                // At either end of the list there is nothing to switch to: the overlay already showed that.
+                guard direction == .left ? swipeHasTarget.left : swipeHasTarget.right,
+                      manager.run(args: ["workspace", direction == .left ? "next" : "prev"]).exitCode == 0 else {
+                    swipeOverlay.cancel()
+                    return
+                }
+                swipeOverlay.commit()
+                flush()
+            case .cancelled:
+                swipeOverlay.cancel()
+        }
+    }
+
+    private func updateSwipeOverlay(_ progress: Float) {
+        let hasTarget = progress < 0 ? swipeHasTarget.left : swipeHasTarget.right
+        swipeOverlay.update(progress: CGFloat(progress), willCommit: hasTarget && SwipeRecognizer.commits(progress))
     }
 
     func statusBarShowConfigProblems() {

@@ -29,6 +29,9 @@ final class Engine {
         self?.manager?.menuBarModel().workspaces.map(\.name) ?? []
     }
     var settingsReload: DispatchWorkItem?
+    let swipeOverlay = SwipeOverlay()
+    /// Whether the swipe in progress has a workspace to go to on its left and its right.
+    var swipeHasTarget = (left: false, right: false)
     var ipcServer: IPCServer?
 
     var configURL: URL?
@@ -249,6 +252,7 @@ final class Engine {
         restoreHiddenWindowsSynchronously()
         hotkeys.unregisterAll()
         SwipeMonitor.shared.stop()
+        swipeOverlay.close()
         updateChecker.stop()
         ipcServer?.stop()
         platform.stop()

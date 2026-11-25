@@ -74,6 +74,11 @@ public enum ScreenGeometry {
         CGRect(x: rect.minX, y: primaryScreenHeight - rect.maxY, width: rect.width, height: rect.height)
     }
 
+    /// Converts a top-left global rect to AppKit coordinates (the same flip, the other way), using the current screens.
+    public static func appKitRect(fromTopLeft rect: CGRect) -> CGRect? {
+        primaryScreenHeight(NSScreen.screens).map { topLeftRect(fromAppKit: rect, primaryScreenHeight: $0) }
+    }
+
     /// Converts an AppKit point (e.g. `NSEvent.mouseLocation`) to top-left global coordinates.
     public static func topLeftPoint(fromAppKit point: CGPoint, primaryScreenHeight: CGFloat) -> CGPoint {
         CGPoint(x: point.x, y: primaryScreenHeight - point.y)

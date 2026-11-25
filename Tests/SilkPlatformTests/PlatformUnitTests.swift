@@ -128,24 +128,77 @@ struct HotkeyModifierTests {
 }
 
 struct SwipeRecognizerTests {
-    private func swipe(_ frames: [(Int, Float, Float)]) -> [SwipeRecognizer.Direction] {
+    private typealias Event = SwipeRecognizer.Event
+
+    private func events(_ frames: [(Int, Float, Float)]) -> [Event] {
         var recognizer = SwipeRecognizer()
         return frames.compactMap { recognizer.feed(fingers: $0.0, x: $0.1, y: $0.2) }
     }
 
-    @Test func threeFingersMovingLeftIsOneSwipe() {
-        #expect(swipe([(1, 0.5, 0.5), (3, 0.6, 0.5), (3, 0.5, 0.5), (3, 0.4, 0.5), (3, 0.2, 0.5), (0, 0, 0)]) == [.left])
+    /// Only how each swipe finished.
+    private func outcomes(_ frames: [(Int, Float, Float)]) -> [Event] {
+        events(frames).filter {
+            switch $0 {
+                case .ended, .cancelled: true
+                default: false
+            }
+        }
+    }
+
+    @Test func tracksProgressAndSwitchesOnlyWhenTheFingersLift() {
+        let result = events([(1, 0.5, 0.5), (3, 0.6, 0.5), (3, 0.57, 0.5), (3, 0.48, 0.5), (3, 0.42, 0.5), (2, 0.3, 0.5), (0, 0, 0)])
+        #expect(result.count == 4)
+        #expect(result.first.map { if case .began = $0 { true } else { false } } == true)
+        #expect(result.dropLast().allSatisfy { if case .ended = $0 { false } else { true } })
+        #expect(result.last == .ended(.left))
+    }
+
+    @Test func slidingBackBelowTheThresholdCancels() {
+        #expect(outcomes([(3, 0.3, 0.5), (3, 0.5, 0.5), (3, 0.33, 0.5), (0, 0, 0)]) == [.cancelled])
+    }
+
+    @Test func slidingBackAndForthAgainCommits() {
+        #expect(outcomes([(3, 0.3, 0.5), (3, 0.5, 0.5), (3, 0.33, 0.5), (3, 0.45, 0.5), (0, 0, 0)]) == [.ended(.right)])
+    }
+
+    @Test func progressIsClamped() {
+        let result = events([(3, 0.1, 0.5), (3, 0.15, 0.5), (3, 0.9, 0.5)])
+        #expect(result.last == .changed(progress: 1))
+    }
+
+    @Test func liftingFingersOneByOneKeepsTheLastThreeFingerProgress() {
+        // The average jumps back as two fingers lift, but the swipe was past the threshold.
+        #expect(outcomes([(3, 0.3, 0.5), (3, 0.45, 0.5), (2, 0.2, 0.5), (1, 0.1, 0.5), (0, 0, 0)]) == [.ended(.right)])
     }
 
     @Test func swipesAgainAfterLifting() {
-        #expect(swipe([(3, 0.3, 0.5), (3, 0.5, 0.5), (0, 0, 0), (3, 0.3, 0.5), (3, 0.5, 0.5)]) == [.right, .right])
+        #expect(outcomes([(3, 0.3, 0.5), (3, 0.5, 0.5), (0, 0, 0), (3, 0.3, 0.5), (3, 0.5, 0.5), (0, 0, 0)]) == [.ended(.right), .ended(.right)])
     }
 
     @Test func ignoresVerticalAndShortMoves() {
-        #expect(swipe([(3, 0.5, 0.2), (3, 0.6, 0.8), (0, 0, 0), (3, 0.5, 0.5), (3, 0.55, 0.5)]) == [])
+        #expect(events([(3, 0.5, 0.2), (3, 0.6, 0.8), (0, 0, 0), (3, 0.5, 0.5), (3, 0.51, 0.5), (0, 0, 0)]) == [])
     }
 
-    @Test func ignoresTwoAndFourFingers() {
-        #expect(swipe([(2, 0.2, 0.5), (2, 0.8, 0.5), (0, 0, 0), (3, 0.2, 0.5), (4, 0.3, 0.5), (3, 0.8, 0.5)]) == [])
+    @Test func verticalFirstNeverBecomesASwipe() {
+        #expect(events([(3, 0.5, 0.5), (3, 0.5, 0.53), (3, 0.8, 0.53), (0, 0, 0)]) == [])
+    }
+
+    @Test func ignoresTwoFingers() {
+        #expect(events([(2, 0.2, 0.5), (2, 0.8, 0.5), (0, 0, 0)]) == [])
+    }
+
+    @Test func aFourthFingerCancels() {
+        #expect(outcomes([(3, 0.2, 0.5), (3, 0.4, 0.5), (4, 0.3, 0.5), (3, 0.8, 0.5), (0, 0, 0)]) == [.cancelled])
+    }
+
+    @Test func cancelEndsTrackingAndStartsOver() {
+        var recognizer = SwipeRecognizer()
+        _ = recognizer.feed(fingers: 3, x: 0.3, y: 0.5)
+        _ = recognizer.feed(fingers: 3, x: 0.5, y: 0.5)
+        #expect(recognizer.cancel() == .cancelled)
+        #expect(recognizer.cancel() == nil)
+        // The next touch may arrive without a zero-finger frame first.
+        _ = recognizer.feed(fingers: 3, x: 0.3, y: 0.5)
+        #expect(recognizer.feed(fingers: 3, x: 0.35, y: 0.5) != nil)
     }
 }

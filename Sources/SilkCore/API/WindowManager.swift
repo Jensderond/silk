@@ -296,6 +296,27 @@ public final class WindowManager {
     /// AeroSpace's menu bar state.
     public func menuBarModel() -> MenuBarModel { MenuBarModel(world) }
 
+    /// A workspace as a swipe towards it previews it: its name and its apps, in tree order.
+    public struct WorkspacePreview: Equatable, Sendable {
+        public var name: String
+        public var appNames: [String]
+    }
+
+    /// The workspaces `workspace prev` and `workspace next` would focus (nil at either end of the focused
+    /// monitor's list), and the monitor they're on.
+    public func neighborWorkspaces() -> (monitor: Monitor, previous: WorkspacePreview?, next: WorkspacePreview?) {
+        let focus = world.focus
+        let preview = { (isNext: Bool) -> WorkspacePreview? in
+            guard case .success(let workspace) = self.world.nextPrevWorkspace(
+                current: focus.workspace, isNext: isNext, wrapAround: false, stdin: nil, target: focus
+            ) else { return nil }
+            var seen = Set<String>()
+            let apps = workspace.allLeafWindowsRecursive.compactMap(\.appName).filter { !$0.isEmpty && seen.insert($0).inserted }
+            return WorkspacePreview(name: workspace.name, appNames: apps)
+        }
+        return (world.monitor(of: focus.workspace), preview(false), preview(true))
+    }
+
     // MARK: Persistence
 
     public func frozenWorld() -> FrozenWorld { world.frozenWorld() }

@@ -100,6 +100,7 @@ extension Engine {
             case .screenLocked:
                 replayDeferredFocus()
                 isScreenLocked = true
+                swipeOverlay.close()
                 saveWorldIfChanged()
                 return
             case .screenUnlocked:
