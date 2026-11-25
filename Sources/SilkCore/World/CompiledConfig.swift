@@ -4,6 +4,8 @@ import SilkConfig
 struct CompiledConfig {
     struct WindowDetectedRule {
         let rule: SilkConfig.WindowDetectedRule
+        /// Where the rule comes from, e.g. `on-window-detected[2]` or `settings.rules[0]`.
+        let path: String
         /// The `if = '…'` matcher command.
         let ifCommand: Shell<any Command>?
         let run: Shell<any Command>
@@ -44,13 +46,17 @@ struct CompiledConfig {
         }
         self.bindings = bindings
 
-        onWindowDetected = config.onWindowDetected.enumerated().map { index, rule in
-            let path = "on-window-detected[\(index)]"
-            let ifCommand = rule.ifCommand.map {
-                compileScript($0, keyPath: "\(path).if", allowExecAndForget: false, diagnostics: &diagnostics)
+        func compileRules(_ rules: [SilkConfig.WindowDetectedRule], keyPath: String) -> [WindowDetectedRule] {
+            rules.enumerated().map { index, rule in
+                let path = "\(keyPath)[\(index)]"
+                let ifCommand = rule.ifCommand.map {
+                    compileScript($0, keyPath: "\(path).if", allowExecAndForget: false, diagnostics: &diagnostics)
+                }
+                return WindowDetectedRule(rule: rule, path: path, ifCommand: ifCommand, run: compile(rule.run, keyPath: "\(path).run"))
             }
-            return WindowDetectedRule(rule: rule, ifCommand: ifCommand, run: compile(rule.run, keyPath: "\(path).run"))
         }
+        onWindowDetected = compileRules(config.settingsRules, keyPath: "settings.rules")
+            + compileRules(config.onWindowDetected, keyPath: "on-window-detected")
         self.diagnostics = diagnostics
     }
 }

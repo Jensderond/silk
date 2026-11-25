@@ -226,6 +226,36 @@ import Testing
         #expect(t.platform.focused == [2])
     }
 
+    /// Rules from the Settings window are checked before the config file's, and the first match ends the search.
+    @Test func settingsRulesWinOverTheConfigFilesRules() {
+        var send = AppSettings.Rule(kind: .sendToWorkspace)
+        send.appId = "com.apple.finder"
+        send.workspace = "files"
+        var leaveAlone = AppSettings.Rule(kind: .leaveAlone)
+        leaveAlone.title = "Picture (in) Picture"
+        var incomplete = AppSettings.Rule(kind: .sendToWorkspace)
+        incomplete.appId = "com.apple.Safari"
+        var settings = AppSettings()
+        settings.rules = [incomplete, send, leaveAlone]
+        var fileRule = WindowDetectedRule()
+        fileRule.run = CommandScripts(["move-node-to-workspace detected"])
+        let t = TestHarness(config: testConfig {
+            $0.settingsRules = settings.windowDetectedRules
+            $0.onWindowDetected = [fileRule]
+        })
+        #expect(t.manager.configDiagnostics.isEmpty)
+        let window = { (id: WindowID, bundleId: String, title: String) in
+            DetectedWindow(id: id, pid: 10, bundleId: bundleId, appName: "App", title: title, frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        }
+
+        t.manager.windowDetected(window(1, "com.apple.finder", "Downloads"), isStartup: false)
+        t.manager.windowDetected(window(2, "com.apple.Safari", "A picture (in) picture window"), isStartup: false)
+        t.manager.windowDetected(window(3, "com.apple.Safari", "Start Page"), isStartup: false)
+        #expect(t.workspace("files").allLeafWindowsRecursive.map(\.id) == [1])
+        #expect(t.world.focus.workspace.floatingWindows.map(\.id) == [2])
+        #expect(t.workspace("detected").allLeafWindowsRecursive.map(\.id) == [3])
+    }
+
     /// Native tabs are windows of their own that share one frame: selecting, opening or closing a tab swaps which one
     /// is on screen. The incoming tab takes the outgoing tab's slot, size and focus, so nothing moves.
     @Test func aTabTakesThePlaceOfTheTabItReplaces() {

@@ -24,6 +24,11 @@ final class Engine {
     let updateChecker = UpdateChecker()
     let updateInstaller = UpdateInstaller()
     let configWindow = MessageWindow()
+    let settings = SettingsStore()
+    private(set) lazy var settingsWindow = SettingsWindow(store: settings) { [weak self] in
+        self?.manager?.menuBarModel().workspaces.map(\.name) ?? []
+    }
+    var settingsReload: DispatchWorkItem?
     var ipcServer: IPCServer?
 
     var configURL: URL?
@@ -65,6 +70,7 @@ final class Engine {
     var launchTimes: [pid_t: Date] = [:]
 
     init(configLoad: ConfigLoadResult) {
+        let configLoad = settings.merged(into: configLoad)
         self.configLoad = configLoad
         configURL = configLoad.url
         let config = configLoad.config
@@ -92,6 +98,8 @@ final class Engine {
         animator.onFrame = { [weak self] window, frame in self?.animationFrame(window: window, frame: frame) }
         animator.onComplete = { [weak self] window, epoch in self?.animationCompleted(window: window, epoch: epoch) }
         applyAppearanceSettings(config)
+        updateSwipeMonitor()
+        settings.onChange = { [weak self] old in self?.settingsChanged(from: old) }
 
         if let frozen = loadFrozenWorld() { manager.restore(frozen) }
         isScreenLocked = Self.isSessionLocked
@@ -240,6 +248,7 @@ final class Engine {
         isShutDown = true
         restoreHiddenWindowsSynchronously()
         hotkeys.unregisterAll()
+        SwipeMonitor.shared.stop()
         updateChecker.stop()
         ipcServer?.stop()
         platform.stop()

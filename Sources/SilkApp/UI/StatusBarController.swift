@@ -39,6 +39,7 @@ protocol StatusBarActions: AnyObject {
     func statusBarFocusWorkspace(_ name: String)
     func statusBarToggleEnabled()
     func statusBarReloadConfig()
+    func statusBarOpenSettings()
     func statusBarOpenConfig()
     func statusBarShowConfigProblems()
     func statusBarRequestAccessibility()
@@ -191,7 +192,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                     menu.addItem(.separator())
                 }
                 menu.addItem(actionItem(state.status == .running ? "Disable" : "Enable", #selector(toggleEnabled), key: "e"))
-                menu.addItem(actionItem("Open Config", #selector(openConfig), key: ","))
+                menu.addItem(actionItem("Settings…", #selector(openSettings), key: ","))
+                menu.addItem(actionItem("Open Config", #selector(openConfig)))
                 menu.addItem(actionItem("Reload Config", #selector(reloadConfig), key: "r"))
                 let styles = NSMenu()
                 for option in Style.allCases {
@@ -226,6 +228,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         actions?.statusBarFocusWorkspace(name)
     }
     @objc private func toggleEnabled() { actions?.statusBarToggleEnabled() }
+    @objc private func openSettings() { actions?.statusBarOpenSettings() }
     @objc private func openConfig() { actions?.statusBarOpenConfig() }
     @objc private func reloadConfig() { actions?.statusBarReloadConfig() }
     @objc private func showConfigProblems() { actions?.statusBarShowConfigProblems() }

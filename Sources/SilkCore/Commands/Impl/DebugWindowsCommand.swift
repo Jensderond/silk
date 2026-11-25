@@ -93,9 +93,7 @@ struct DebugWindowsRecorder {
             guard let rect else { return NSNull() }
             return ["x": rect.minX, "y": rect.minY, "width": rect.width, "height": rect.height]
         }
-        let matchingRules = world.compiledConfig.onWindowDetected.enumerated()
-            .filter { world.matches($0.element, window) }
-            .map { "on-window-detected[\($0.offset)]" }
+        let matchingRules = world.compiledConfig.onWindowDetected.filter { world.matches($0, window) }.map(\.path)
         let info: [String: Any] = [
             "Silk.windowId": window.id,
             "Silk.title": window.title,

@@ -250,6 +250,9 @@ public struct Config: Equatable, Sendable {
     /// Always contains "main".
     public var modes: [String: Mode] = ["main": Mode(name: "main")]
     public var onWindowDetected: [WindowDetectedRule] = []
+    /// Rules made in the Settings window (not from the config file). They are checked before `onWindowDetected`
+    /// and a match ends the search, so the first match wins.
+    public var settingsRules: [WindowDetectedRule] = []
 
     public var focusBackend: FocusBackend = .appkit
     public var animations = AnimationConfig()

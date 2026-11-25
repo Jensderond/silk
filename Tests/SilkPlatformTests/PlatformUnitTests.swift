@@ -126,3 +126,26 @@ struct HotkeyModifierTests {
         #expect(HotkeyModifiers([.alt, .ctrl]).carbonFlags == 0x0800 | 0x1000)
     }
 }
+
+struct SwipeRecognizerTests {
+    private func swipe(_ frames: [(Int, Float, Float)]) -> [SwipeRecognizer.Direction] {
+        var recognizer = SwipeRecognizer()
+        return frames.compactMap { recognizer.feed(fingers: $0.0, x: $0.1, y: $0.2) }
+    }
+
+    @Test func threeFingersMovingLeftIsOneSwipe() {
+        #expect(swipe([(1, 0.5, 0.5), (3, 0.6, 0.5), (3, 0.5, 0.5), (3, 0.4, 0.5), (3, 0.2, 0.5), (0, 0, 0)]) == [.left])
+    }
+
+    @Test func swipesAgainAfterLifting() {
+        #expect(swipe([(3, 0.3, 0.5), (3, 0.5, 0.5), (0, 0, 0), (3, 0.3, 0.5), (3, 0.5, 0.5)]) == [.right, .right])
+    }
+
+    @Test func ignoresVerticalAndShortMoves() {
+        #expect(swipe([(3, 0.5, 0.2), (3, 0.6, 0.8), (0, 0, 0), (3, 0.5, 0.5), (3, 0.55, 0.5)]) == [])
+    }
+
+    @Test func ignoresTwoAndFourFingers() {
+        #expect(swipe([(2, 0.2, 0.5), (2, 0.8, 0.5), (0, 0, 0), (3, 0.2, 0.5), (4, 0.3, 0.5), (3, 0.8, 0.5)]) == [])
+    }
+}

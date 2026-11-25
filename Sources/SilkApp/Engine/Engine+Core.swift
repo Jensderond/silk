@@ -71,7 +71,7 @@ extension Engine: @preconcurrency PlatformActions {
     func reloadConfig() -> ConfigLoadResult {
         let result = configURL.map { ConfigLoader.load(contentsOf: $0) } ?? ConfigLoader.load()
         if !result.isFatal { configURL = result.url }
-        return result
+        return settings.merged(into: result)
     }
 
     func broadcast(_ event: SilkCore.ServerEvent) {

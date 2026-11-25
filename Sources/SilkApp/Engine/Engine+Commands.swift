@@ -141,6 +141,43 @@ extension Engine: StatusBarActions {
         NSWorkspace.shared.open([url], withApplicationAt: editor, configuration: NSWorkspace.OpenConfiguration())
     }
 
+    func statusBarOpenSettings() {
+        settingsWindow.show()
+    }
+
+    /// The Settings window changed something. Rules reach the core through a config reload, a moment
+    /// after the last change so typing a title doesn't reload on every key.
+    func settingsChanged(from old: AppSettings) {
+        let new = settings.settings
+        if new.swipeBetweenWorkspaces != old.swipeBetweenWorkspaces { updateSwipeMonitor() }
+        guard new.windowDetectedRules != old.windowDetectedRules else { return }
+        settingsReload?.cancel()
+        let reload = DispatchWorkItem { [weak self] in
+            guard let self, self.manager != nil else { return }
+            _ = self.manager.run(args: ["reload-config"])
+            self.flush()
+        }
+        settingsReload = reload
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: reload)
+    }
+
+    /// Starts or stops watching the trackpad for three-finger swipes. Swiping left goes to the next
+    /// workspace, like swiping between macOS's own Spaces.
+    func updateSwipeMonitor() {
+        guard settings.settings.swipeBetweenWorkspaces else {
+            SwipeMonitor.shared.stop()
+            return
+        }
+        let started = SwipeMonitor.shared.start { [weak self] direction in
+            MainActor.assumeIsolated {
+                guard let self, self.isStarted, !self.isScreenLocked else { return }
+                _ = self.manager.run(args: ["workspace", direction == .left ? "next" : "prev"])
+                self.flush()
+            }
+        }
+        Trace.log("swipe monitor \(started ? "started" : "unavailable")")
+    }
+
     func statusBarShowConfigProblems() {
         let messages = configLoad.diagnostics.map(\.description) + manager.configDiagnostics.map(\.description)
         showConfigMessage(messages.joined(separator: "\n"))
