@@ -19,6 +19,8 @@ final class Window: TreeNode {
     var kind: WindowKind
 
     var lastFloatingSize: CGSize?
+    /// `layout floating` already sized this window once; from then on its floating size is the user's.
+    var hasFloatedByCommand = false
     /// AeroSpace's (non-native) `fullscreen` command state.
     var isFullscreen = false
     var noOuterGapsInFullscreen = false
@@ -57,6 +59,9 @@ final class Window: TreeNode {
     var isHiddenInCorner: Bool { prevUnhiddenProportionalPosition != nil }
 
     var isFloating: Bool { parent is FloatingWindowsContainer }
+
+    /// Collapsed into a bar in the screen corner (`minimize-to-bar`).
+    var isCollapsed: Bool { parent is CollapsedWindowsContainer }
 
     /// Finder's Quick Look preview (space): a transient panel macOS keeps as one window — it is reported
     /// destroyed when closed and re-shows with the same id. It can only appear in response to a space press,

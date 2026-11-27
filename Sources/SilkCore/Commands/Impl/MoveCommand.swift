@@ -60,7 +60,8 @@ struct MoveCommand: ParsableCommand {
                 return moveOut(window, context)
             case is FloatingWindowsContainer:
                 return io.fail("moving floating windows isn't yet supported")
-            case is MacosMinimizedWindowsContainer, is MacosFullscreenWindowsContainer, is MacosHiddenAppsWindowsContainer:
+            case is MacosMinimizedWindowsContainer, is MacosFullscreenWindowsContainer, is MacosHiddenAppsWindowsContainer,
+                 is CollapsedWindowsContainer:
                 return io.fail(Self.unconventionalWindowMessage)
             case nil:
                 return ExitCode.fail

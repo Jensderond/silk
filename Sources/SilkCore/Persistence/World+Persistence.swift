@@ -16,7 +16,8 @@ extension World {
                 name: workspace.name,
                 monitorId: monitor(of: workspace).id,
                 root: freeze(workspace.rootTilingContainer),
-                floatingWindows: workspace.floatingWindows.map(freeze),
+                // Collapsed windows are put back on screen when Silk stops, so they are saved as floating
+                floatingWindows: (workspace.floatingWindows + workspace.collapsedWindows).map(freeze),
                 macosUnconventionalWindows: workspace.macosUnconventionalWindows.map(freeze)
             )
         }
@@ -48,7 +49,7 @@ extension World {
         FrozenWindow(
             id: window.id,
             weight: Double(tilingWeight(of: window) ?? 1),
-            frame: window.isFloating ? (unhiddenFloatingFrame(window) ?? window.lastKnownFrame) : nil,
+            frame: window.isFloating || window.isCollapsed ? (unhiddenFloatingFrame(window) ?? window.lastKnownFrame) : nil,
             lastFloatingSize: window.lastFloatingSize
         )
     }

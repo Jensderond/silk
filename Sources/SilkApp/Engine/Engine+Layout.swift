@@ -28,7 +28,10 @@ extension Engine {
     /// Translates a complete plan into the moves and snaps that actually change something.
     /// `parks` hides windows that just left the screen; apply it after `request` (see `flush`).
     /// `revealed` lists windows that came back on screen from a hidden workspace.
-    func makeAnimationRequest(for plan: LayoutPlan) -> (request: AnimationRequest, parks: AnimationRequest, revealed: [UInt32]) {
+    /// `barFrames`: the bars of this plan's collapsed windows (`self.barFrames` still holds the previous plan's).
+    func makeAnimationRequest(
+        for plan: LayoutPlan, barFrames newBarFrames: [UInt32: CGRect] = [:]
+    ) -> (request: AnimationRequest, parks: AnimationRequest, revealed: [UInt32]) {
         var request = AnimationRequest(epoch: plan.epoch)
         var parks = AnimationRequest(epoch: plan.epoch)
         var revealed: [UInt32] = []
@@ -66,6 +69,10 @@ extension Engine {
                     case .move: request.moves.append(.init(window: id, pid: window.pid, from: initial, to: target, kind: .open(.move), displayID: displayID))
                     case .popin: request.moves.append(.init(window: id, pid: window.pid, from: initial, to: target, kind: .open(.popIn), displayID: displayID))
                 }
+            } else if wasHidden, let bar = barFrames[id], let size = current?.size {
+                // Restored from its bar: slides out of the corner to where it was
+                let from = CGRect(origin: bar.origin, size: size)
+                request.moves.append(.init(window: id, pid: window.pid, from: from, to: target, kind: .workspaceIn, displayID: displayID))
             } else if wasHidden, let slide = switches.incoming(target), let size = current?.size {
                 let from = slide.entryFrame(for: target, size: size)
                 request.moves.append(.init(window: id, pid: window.pid, from: from, to: target, kind: .workspaceIn, displayID: displayID))
@@ -87,7 +94,14 @@ extension Engine {
             window.target = parked
             // Windows leaving the screen park without sliding: macOS keeps 40 pt of a window on screen
             // at the left edge and 1 pt at the right, so a slide-out would bunch them up at the edge.
-            if wasVisible {
+            if wasVisible, let bar = newBarFrames[id], let current = animator.presentedFrame(window: id) ?? window.lastKnownFrame {
+                // Collapsed into its bar: slides into the corner, then parks
+                let to = CGRect(origin: bar.origin, size: current.size)
+                request.moves.append(.init(
+                    window: id, pid: window.pid, from: current, to: to, kind: .workspaceOut,
+                    displayID: monitors.displayID(containing: current), then: parked
+                ))
+            } else if wasVisible {
                 parks.snaps.append(.init(window: id, frame: parked))
             } else {
                 request.snaps.append(.init(window: id, frame: parked))

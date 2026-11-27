@@ -67,6 +67,15 @@ final class MacosHiddenAppsWindowsContainer: TreeNode {
     }
 }
 
+/// Floating windows of a workspace the user collapsed into a bar in the screen corner (`minimize-to-bar`).
+/// They are parked off screen like windows of a hidden workspace; the app draws a bar for each. Oldest first.
+final class CollapsedWindowsContainer: TreeNode {
+    init(parent: Workspace) {
+        super.init(adaptiveWeight: 1)
+        bind(to: parent, adaptiveWeight: 1, index: indexBindLast)
+    }
+}
+
 /// Minimized windows. Global: they don't belong to any workspace.
 final class MacosMinimizedWindowsContainer: TreeNode {
     init() { super.init(adaptiveWeight: 1) }
@@ -104,6 +113,7 @@ enum ChildParentRelation {
     case macosNativeHiddenAppWindow
     case macosNativeMinimizedWindow
     case macosPopupWindow
+    case collapsedWindow
     case tiling(TilingContainer)
     case rootTilingContainer
     /// A special container directly under its workspace.
@@ -118,11 +128,12 @@ enum ChildParentRelation {
             case (is Window, is FloatingWindowsContainer): self = .floatingWindow
             case (is Window, is MacosFullscreenWindowsContainer): self = .macosNativeFullscreenWindow
             case (is Window, is MacosHiddenAppsWindowsContainer): self = .macosNativeHiddenAppWindow
+            case (is Window, is CollapsedWindowsContainer): self = .collapsedWindow
             case (is Window, let container as TilingContainer), (is TilingContainer, let container as TilingContainer):
                 self = .tiling(container)
             case (is TilingContainer, is Workspace): self = .rootTilingContainer
             case (is FloatingWindowsContainer, is Workspace), (is MacosFullscreenWindowsContainer, is Workspace),
-                 (is MacosHiddenAppsWindowsContainer, is Workspace):
+                 (is MacosHiddenAppsWindowsContainer, is Workspace), (is CollapsedWindowsContainer, is Workspace):
                 self = .shimContainer
             default: return nil
         }

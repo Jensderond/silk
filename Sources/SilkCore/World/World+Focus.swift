@@ -36,7 +36,9 @@ extension World {
 
     /// Focuses the workspace's most recent window (or the empty workspace).
     func liveFocus(of workspace: Workspace) -> LiveFocus {
-        LiveFocus(window: workspace.mostRecentWindowRecursive ?? workspace.anyLeafWindowRecursive, workspace: workspace)
+        let window = workspace.mostRecentWindowRecursive ?? workspace.anyLeafWindowRecursive
+        // A window collapsed into a bar is parked off screen: it never gets focus by default
+        return LiveFocus(window: window?.isCollapsed == true ? workspace.mostRecentUncollapsedWindow : window, workspace: workspace)
     }
 
     /// Nil for windows outside any workspace (minimized, popups, unbound).
@@ -89,6 +91,8 @@ extension World {
         nativeFocusedPopupId = nil
         if nativeFocused?.id != lastKnownNativeFocusedWindowId {
             if let nativeFocused {
+                // macOS focused a collapsed window (cmd-tab to its app, a Dock click): the user wants it back
+                if nativeFocused.isCollapsed { expand(nativeFocused) }
                 moveTransientFloatingWindowToVisibleWorkspace(nativeFocused)
                 focusWindow(nativeFocused)
             }

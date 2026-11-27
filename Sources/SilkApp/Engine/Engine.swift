@@ -30,6 +30,9 @@ final class Engine {
     }
     var settingsReload: DispatchWorkItem?
     let swipeOverlay = SwipeOverlay()
+    let collapsedBars = CollapsedBars()
+    /// Where the bars of the last plan are (top-left coordinates): restored windows slide out of theirs.
+    var barFrames: [UInt32: CGRect] = [:]
     /// Whether the swipe in progress has a workspace to go to on its left and its right.
     var swipeHasTarget = (left: false, right: false)
     var ipcServer: IPCServer?
@@ -102,6 +105,11 @@ final class Engine {
         animator.onComplete = { [weak self] window, epoch in self?.animationCompleted(window: window, epoch: epoch) }
         applyAppearanceSettings(config)
         updateSwipeMonitor()
+        collapsedBars.onClick = { [weak self] window in
+            guard let self else { return }
+            _ = self.manager.run(args: ["minimize-to-bar", "--window-id", String(window)])
+            self.flush()
+        }
         settings.onChange = { [weak self] old in self?.settingsChanged(from: old) }
 
         if let frozen = loadFrozenWorld() { manager.restore(frozen) }
@@ -157,7 +165,10 @@ final class Engine {
         guard isStarted, !isScreenLocked, manager.needsLayout else { return }
         Trace.log("flush begins")
         let plan = manager.computeLayout()
-        let (request, parks, revealed) = makeAnimationRequest(for: plan)
+        let newBarFrames = CollapsedBars.frames(for: plan.bars)
+        let (request, parks, revealed) = makeAnimationRequest(for: plan, barFrames: newBarFrames)
+        barFrames = newBarFrames
+        collapsedBars.update(plan.bars)
         Trace.log("flush epoch \(plan.epoch): \(request.moves.map { "\($0.window) \($0.kind) \($0.from) → \($0.to)" }) snaps \(request.snaps.map(\.window)) parks \(parks.snaps.map(\.window))")
         if !request.moves.isEmpty || !request.snaps.isEmpty {
             animator.apply(request)
@@ -253,6 +264,7 @@ final class Engine {
         hotkeys.unregisterAll()
         SwipeMonitor.shared.stop()
         swipeOverlay.close()
+        collapsedBars.close()
         updateChecker.stop()
         ipcServer?.stop()
         platform.stop()

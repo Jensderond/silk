@@ -224,6 +224,7 @@ final class Formatter {
             case is MacosFullscreenWindowsContainer: .success(.string("macos_native_fullscreen"))
             case is MacosHiddenAppsWindowsContainer: .success(.string("macos_native_window_of_hidden_app"))
             case is MacosMinimizedWindowsContainer: .success(.string("macos_native_minimized"))
+            case is CollapsedWindowsContainer: .success(.string("minimized_to_bar"))
             case is MacosPopupWindowsContainer: .success(.string("NULL-WINDOW-LAYOUT"))
             default: .failure(.notPossible("Not possible"))
         }

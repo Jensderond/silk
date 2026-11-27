@@ -114,6 +114,8 @@ struct LayoutCommand: ParsableCommand {
                     node = .floating(container)
                 case let container as TilingContainer:
                     node = .tiling(container)
+                case is CollapsedWindowsContainer:
+                    return io.fail("Can't change layout of a window minimized to a bar")
                 case is MacosFullscreenWindowsContainer, is MacosHiddenAppsWindowsContainer, is MacosMinimizedWindowsContainer:
                     return io.fail("Can't change layout for macOS minimized, fullscreen windows or windows or hidden apps. This behavior is subject to change")
                 default:
@@ -144,6 +146,7 @@ struct LayoutCommand: ParsableCommand {
                         return ExitCode.success
                     case .floating(let container):
                         window.lastFloatingSize = window.lastKnownFrame?.size ?? window.lastFloatingSize
+                        window.hasFloatedByCommand = true
                         guard let workspace = container.nodeWorkspace else { return io.fail(internalErrorMessage()) }
                         world.relayoutWindow(window, on: workspace, forceTile: true)
                         return ExitCode.success
@@ -151,12 +154,40 @@ struct LayoutCommand: ParsableCommand {
             case .floating:
                 guard let window = target.window else { return io.fail(noWindowIsFocused) }
                 world.bindAsFloatingWindow(window, to: target.workspace)
-                if let size = window.lastFloatingSize, let frame = window.lastKnownFrame {
-                    window.lastKnownFrame = CGRect(origin: frame.origin, size: size)
+                if var size = window.lastFloatingSize, let frame = window.lastKnownFrame {
+                    // A window that was as large as a tile or the screen wouldn't look floating at all. Only the
+                    // first time: after that the size is the one the window had when it last floated.
+                    // A remembered size that fills the screen is never worth keeping.
+                    let screen = world.monitor(of: target.workspace).visibleFrame.size
+                    let fillsScreen = size.width >= screen.width * Self.fillsScreenFraction
+                        || size.height >= screen.height * Self.fillsScreenFraction
+                    if !window.hasFloatedByCommand || fillsScreen {
+                        size.width = min(size.width, Self.maxToggledFloatingSize.width)
+                        size.height = min(size.height, Self.maxToggledFloatingSize.height)
+                        window.lastFloatingSize = size
+                        window.hasFloatedByCommand = true
+                    }
+                    var origin = frame.origin
+                    if !window.isHiddenInCorner {
+                        // Resize around the tile's centre, so the window lifts out of its tile instead of
+                        // collapsing into the tile's corner while its neighbours grow underneath
+                        let visible = world.monitor(of: target.workspace).visibleFrame
+                        origin = CGPoint(
+                            x: (frame.midX - size.width / 2).coerced(in: visible.minX ... max(visible.minX, visible.maxX - size.width)),
+                            y: (frame.midY - size.height / 2).coerced(in: visible.minY ... max(visible.minY, visible.maxY - size.height))
+                        )
+                    }
+                    window.lastKnownFrame = CGRect(origin: origin, size: size)
                 }
                 return ExitCode.success
         }
     }
+
+    /// A window made floating with this command for the first time is at most this large (Silk-only; AeroSpace
+    /// keeps any size). The user can enlarge it afterwards.
+    static let maxToggledFloatingSize = CGSize(width: 900, height: 800)
+    /// A floating size covering at least this share of the monitor's width or height counts as filling the screen.
+    static let fillsScreenFraction: CGFloat = 0.9
 
     private func changeTilingLayout(
         _ io: CommandIO,

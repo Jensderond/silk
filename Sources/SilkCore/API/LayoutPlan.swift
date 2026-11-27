@@ -16,6 +16,9 @@ public struct LayoutPlan: Equatable, Sendable {
     public var userDriven: Set<WindowID>
     /// Monitors whose visible workspace changed since the previous plan.
     public var workspaceSwitches: [WorkspaceSwitch]
+    /// Windows collapsed into a bar (`minimize-to-bar`) on visible workspaces, per monitor oldest first. They
+    /// are in `hidden` too: the window itself is parked.
+    public var bars: [CollapsedBar]
     public var focusedWindow: WindowID?
     /// Tiling and floating windows on the focused window's workspace, the focused one included (0 without a
     /// focused window). Native fullscreen, minimized and hidden-app windows don't count.
@@ -28,6 +31,7 @@ public struct LayoutPlan: Equatable, Sendable {
         newlyPlaced: [WindowID: CGRect] = [:],
         userDriven: Set<WindowID> = [],
         workspaceSwitches: [WorkspaceSwitch] = [],
+        bars: [CollapsedBar] = [],
         focusedWindow: WindowID? = nil,
         focusedWorkspaceWindowCount: Int = 0
     ) {
@@ -37,8 +41,28 @@ public struct LayoutPlan: Equatable, Sendable {
         self.newlyPlaced = newlyPlaced
         self.userDriven = userDriven
         self.workspaceSwitches = workspaceSwitches
+        self.bars = bars
         self.focusedWindow = focusedWindow
         self.focusedWorkspaceWindowCount = focusedWorkspaceWindowCount
+    }
+}
+
+/// A collapsed window the app draws a bar for, in the bottom-right corner of `monitorVisibleRect`.
+public struct CollapsedBar: Equatable, Sendable {
+    public var window: WindowID
+    public var pid: pid_t
+    public var title: String
+    public var appName: String?
+    public var monitor: MonitorID
+    public var monitorVisibleRect: CGRect
+
+    public init(window: WindowID, pid: pid_t, title: String, appName: String?, monitor: MonitorID, monitorVisibleRect: CGRect) {
+        self.window = window
+        self.pid = pid
+        self.title = title
+        self.appName = appName
+        self.monitor = monitor
+        self.monitorVisibleRect = monitorVisibleRect
     }
 }
 

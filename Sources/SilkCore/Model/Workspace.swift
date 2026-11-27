@@ -51,6 +51,25 @@ final class Workspace: TreeNode {
         children.lazy.compactMap { $0 as? MacosHiddenAppsWindowsContainer }.first ?? MacosHiddenAppsWindowsContainer(parent: self)
     }
 
+    var collapsedWindowsContainer: CollapsedWindowsContainer {
+        children.lazy.compactMap { $0 as? CollapsedWindowsContainer }.first ?? CollapsedWindowsContainer(parent: self)
+    }
+
+    /// Windows collapsed into a bar, oldest first.
+    var collapsedWindows: [Window] {
+        children.lazy.compactMap { $0 as? CollapsedWindowsContainer }.first?.children.compactMap { $0 as? Window } ?? []
+    }
+
+    /// The most recently used window that isn't collapsed into a bar.
+    var mostRecentUncollapsedWindow: Window? {
+        let candidates = children.filter { !($0 is CollapsedWindowsContainer) }
+        let rest = candidates.reversed().filter { child in !mruChildren.contains { $0 === child } }
+        for child in mruChildren.filter({ !($0 is CollapsedWindowsContainer) }) + rest {
+            if let window = child.mostRecentNonEmptyWindowRecursive { return window }
+        }
+        return nil
+    }
+
     var floatingWindows: [Window] {
         children.lazy.compactMap { $0 as? FloatingWindowsContainer }.first?.children.compactMap { $0 as? Window } ?? []
     }

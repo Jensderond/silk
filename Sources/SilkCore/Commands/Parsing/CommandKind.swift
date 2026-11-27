@@ -25,6 +25,8 @@ enum CommandKind: String, CaseIterable {
     case listWorkspaces = "list-workspaces"
     case macosNativeFullscreen = "macos-native-fullscreen"
     case macosNativeMinimize = "macos-native-minimize"
+    /// Silk-only.
+    case minimizeToBar = "minimize-to-bar"
     case mode
     case move
     case moveMouse = "move-mouse"

@@ -149,6 +149,12 @@ gaps.outer.right =      0
     alt-slash = 'layout tiles horizontal vertical'
     alt-comma = 'layout accordion horizontal vertical'
 
+    # Take the focused window out of the tiling layout, or put it back
+    cmd-alt-space = 'layout floating tiling'
+    # Silk-only: collapse the focused floating window into a small bar in the bottom-right corner of its
+    # workspace; press again (or click the bar) to bring it back
+    cmd-alt-m = 'minimize-to-bar'
+
     # See: https://nikitabobko.github.io/AeroSpace/commands#focus
     alt-h = 'focus left'
     alt-j = 'focus down'

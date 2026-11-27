@@ -104,6 +104,9 @@ enum HelpText {
     static let macosNativeMinimize = """
         USAGE: macos-native-minimize [-h|--help] [--window-id <window-id>]
         """
+    static let minimizeToBar = """
+        USAGE: minimize-to-bar [-h|--help] [--window-id <window-id>]
+        """
     static let mode = """
         USAGE: mode [-h|--help] [--] <binding-mode>
         """

@@ -14,6 +14,11 @@ struct MacosNativeMinimizeCommand: ParsableCommand {
             return context.io.fail("The command is uncapable of unminimizing windows yet. Sorry")
         }
         context.world.platform.setMinimized(window: window.id, true)
+        // Recorded now, not when macOS reports it, so the window returns to where it was (floating stays floating)
+        if window.layoutReason == .standard, let parent = window.parent, let parentKind = NonLeafNodeKind(parent) {
+            window.layoutReason = .macos(prevParentKind: parentKind)
+        }
+        window.isMacosMinimized = true
         window.bind(to: context.world.minimizedContainer, adaptiveWeight: 1, index: indexBindLast)
         return ExitCode.success
     }

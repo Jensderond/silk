@@ -67,7 +67,7 @@ import Testing
         let config = ConfigLoader.defaultConfig
         #expect(config.configVersion == 2)
         #expect(config.persistentWorkspaces.count == 31)
-        #expect(config.modes["main"]?.bindings.count == 77)
+        #expect(config.modes["main"]?.bindings.count == 79)
         #expect(config.modes["service"]?.bindings.count == 8)
         #expect(config.gaps == Gaps())
         #expect(!config.focusFollowsMouse)

@@ -11,15 +11,27 @@ struct LayoutPlanner {
         epoch += 1
         var layout = TreeLayout(world: world)
         var hidden: [WindowID: HideTarget] = [:]
+        var bars: [CollapsedBar] = []
 
         if world.isEnabled {
             // Unhide visible workspaces first, then hide the others (AeroSpace order, reduces flicker)
             for monitor in world.monitors {
                 let workspace = world.activeWorkspace(on: monitor)
-                workspace.allLeafWindowsRecursive.forEach(world.unhideFromCorner)
+                workspace.allLeafWindowsRecursive.filter { !$0.isCollapsed }.forEach(world.unhideFromCorner)
                 layout.layoutWorkspace(workspace)
             }
             let corners = Dictionary(world.monitors.map { ($0.id, world.optimalHideCorner(for: $0)) }, uniquingKeysWith: { first, _ in first })
+            // Collapsed windows stay parked while their workspace is visible; the app draws their bars
+            for monitor in world.monitors {
+                for window in world.activeWorkspace(on: monitor).collapsedWindows {
+                    guard let target = world.hideTarget(for: window, corner: corners[monitor.id] ?? .bottomRight) else { continue }
+                    hidden[window.id] = target
+                    bars.append(CollapsedBar(
+                        window: window.id, pid: window.pid, title: window.title, appName: window.appName,
+                        monitor: monitor.id, monitorVisibleRect: monitor.visibleFrame
+                    ))
+                }
+            }
             for workspace in world.allWorkspaces where !world.isVisible(workspace) {
                 let corner = corners[world.monitor(of: workspace).id] ?? .bottomRight
                 for window in workspace.allLeafWindowsRecursive where !(window.parent is MacosFullscreenWindowsContainer) {
@@ -74,6 +86,7 @@ struct LayoutPlanner {
             newlyPlaced: newlyPlaced,
             userDriven: userDriven,
             workspaceSwitches: switches,
+            bars: bars,
             focusedWindow: focused?.id,
             focusedWorkspaceWindowCount: focusedWorkspaceWindowCount
         )

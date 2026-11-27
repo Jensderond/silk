@@ -12,6 +12,7 @@ enum CommandRegistry {
             FullscreenCommand.self, JoinWithCommand.self, LayoutCommand.self, ListAppsCommand.self,
             ListExecEnvVarsCommand.self, ListModesCommand.self, ListMonitorsCommand.self, ListWindowsCommand.self,
             ListWorkspacesCommand.self, MacosNativeFullscreenCommand.self, MacosNativeMinimizeCommand.self,
+            MinimizeToBarCommand.self,
             ModeCommand.self, MoveCommand.self, MoveMouseCommand.self, MoveNodeToMonitorCommand.self,
             MoveNodeToWorkspaceCommand.self, MoveWorkspaceToMonitorCommand.self, ReloadConfigCommand.self,
             ResizeCommand.self, RunCallbackCommand.self, SplitCommand.self, SummonWorkspaceCommand.self,

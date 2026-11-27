@@ -166,7 +166,23 @@ import Testing
         window.lastFloatingSize = CGSize(width: 640, height: 480)
         t.focus(window)
         t.run("layout floating")
-        #expect(window.lastKnownFrame == CGRect(x: 0, y: 0, width: 640, height: 480))
+        // Centred on the tile it leaves
+        #expect(window.lastKnownFrame == CGRect(x: 640, y: 300, width: 640, height: 480))
+        // Larger than 900x800: capped, per dimension
+        let big = t.window(2, in: workspace.rootTilingContainer, frame: CGRect(x: 0, y: 0, width: 1920, height: 1080))
+        big.lastFloatingSize = CGSize(width: 1800, height: 700)
+        t.run("layout --window-id 2 floating")
+        #expect(big.lastKnownFrame == CGRect(x: 510, y: 190, width: 900, height: 700))
+        // Only the first time: a size the user chose afterwards comes back as it was
+        big.lastKnownFrame = CGRect(x: 0, y: 0, width: 1600, height: 900)
+        t.run("layout --window-id 2 tiling")
+        t.run("layout --window-id 2 floating")
+        #expect(big.lastKnownFrame?.size == CGSize(width: 1600, height: 900))
+        // Unless that size fills the screen: then it wouldn't look floating at all
+        big.lastKnownFrame = CGRect(x: 0, y: 0, width: 1900, height: 1000)
+        t.run("layout --window-id 2 tiling")
+        t.run("layout --window-id 2 floating")
+        #expect(big.lastKnownFrame?.size == CGSize(width: 900, height: 800))
         window.lastKnownFrame = CGRect(x: 10, y: 10, width: 700, height: 500)
         t.run("layout tiling")
         #expect(window.lastFloatingSize == CGSize(width: 700, height: 500))

@@ -196,6 +196,77 @@ import Testing
         #expect(t.run("macos-native-minimize --window-id 1") == CommandResult(exitCode: 2, stderr: "Window 1 doesn't belong to any monitor. And thus can't even define a focused workspace"))
     }
 
+    @Test func minimizeToBarCollapsesAndRestoresFloatingWindows() {
+        let a = t.workspace("a")
+        let tiled = t.window(1, in: a.rootTilingContainer)
+        #expect(t.focus(tiled))
+        #expect(t.run("minimize-to-bar") == CommandResult(exitCode: 2, stderr: "Only floating windows can be minimized to a bar. Tip: run 'layout floating' first"))
+
+        let frame = CGRect(x: 300, y: 200, width: 640, height: 480)
+        let floating = t.window(2, in: a.floatingWindowsContainer, frame: frame)
+        let other = t.window(3, in: a.floatingWindowsContainer, frame: CGRect(x: 0, y: 0, width: 100, height: 100))
+        #expect(t.focus(floating))
+        #expect(t.run("minimize-to-bar").exitCode == 0)
+        #expect(floating.isCollapsed)
+        #expect(t.focusedWindowId == 3)
+        #expect(t.world.liveFocus(of: a).window?.id == 3)
+
+        // Parked, with a bar, and no frame of its own
+        var plan = t.manager.computeLayout()
+        #expect(plan.frames[2] == nil)
+        #expect(plan.hidden[2] != nil)
+        #expect(plan.bars.map(\.window) == [2])
+        #expect(t.run("list-windows --all --format %{window-id}:%{window-layout}").stdout.contains("2:minimized_to_bar"))
+
+        // A second press brings it back even though another floating window has focus
+        #expect(t.focus(other))
+        #expect(t.run("minimize-to-bar").exitCode == 0)
+        #expect(floating.isFloating && other.isFloating)
+        #expect(t.focusedWindowId == 2)
+        plan = t.manager.computeLayout()
+        #expect(plan.frames[2] == frame)
+        #expect(plan.hidden[2] == nil)
+        #expect(plan.bars.isEmpty)
+
+        // The bar belongs to its workspace: no bar while another workspace is shown
+        #expect(t.run("minimize-to-bar --window-id 2").exitCode == 0)
+        #expect(t.world.focusWorkspace(t.workspace("b")))
+        plan = t.manager.computeLayout()
+        #expect(plan.bars.isEmpty)
+        #expect(plan.hidden[2] != nil)
+        #expect(t.world.focusWorkspace(a))
+        #expect(t.manager.computeLayout().bars.map(\.window) == [2])
+
+        // Clicking the bar, or macOS focusing the window, brings it back
+        #expect(t.run("minimize-to-bar --window-id 2").exitCode == 0)
+        #expect(floating.isFloating)
+        #expect(t.run("minimize-to-bar --window-id 2").exitCode == 0)
+        t.manager.nativeFocusChanged(window: 2, pid: 0)
+        #expect(floating.isFloating)
+        #expect(t.focusedWindowId == 2)
+        #expect(t.manager.computeLayout().frames[2] == frame)
+    }
+
+    @Test func collapsedWindowAloneOnItsWorkspaceIsNotFocused() {
+        let a = t.workspace("a")
+        let floating = t.window(1, in: a.floatingWindowsContainer, frame: CGRect(x: 0, y: 0, width: 100, height: 100))
+        #expect(t.focus(floating))
+        #expect(t.run("minimize-to-bar").exitCode == 0)
+        #expect(t.focusedWindowId == nil)
+        #expect(t.world.focus.workspace === a)
+        #expect(t.run("minimize-to-bar").exitCode == 0)
+        #expect(t.focusedWindowId == 1)
+    }
+
+    @Test func minimizedFloatingWindowComesBackFloating() {
+        let floating = t.window(1, in: t.workspace("a").floatingWindowsContainer)
+        #expect(t.focus(floating))
+        #expect(t.run("macos-native-minimize").exitCode == 0)
+        t.manager.windowMinimizedChanged(1, isMinimized: true)
+        t.manager.windowMinimizedChanged(1, isMinimized: false)
+        #expect(floating.isFloating)
+    }
+
     @Test func volume() {
         #expect(t.run("volume up").exitCode == 0)
         #expect(t.platform.volumeState == VolumeState(level: 0.5625, isMuted: false))

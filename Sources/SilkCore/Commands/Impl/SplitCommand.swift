@@ -39,7 +39,8 @@ struct SplitCommand: ParsableCommand {
                     window.bind(to: newParent, adaptiveWeight: weightAuto, index: 0)
                 }
                 return ExitCode.success
-            case is MacosMinimizedWindowsContainer, is MacosFullscreenWindowsContainer, is MacosHiddenAppsWindowsContainer:
+            case is MacosMinimizedWindowsContainer, is MacosFullscreenWindowsContainer, is MacosHiddenAppsWindowsContainer,
+                 is CollapsedWindowsContainer:
                 return io.fail("Can't split macos fullscreen, minimized windows and windows of hidden apps. This behavior may change in the future")
             default:
                 return io.fail(internalErrorMessage())
